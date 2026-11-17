@@ -52,6 +52,8 @@ export interface StoredInvoiceRecord {
     | 'ERROR'
     | 'CONTINGENCY_PENDING';
   fechaEmision: string;
+  rncEmisor?: string;
+  razonSocialEmisor?: string;
   rncComprador?: string;
   razonSocialComprador?: string;
   identificadorExtranjero?: string;
@@ -60,6 +62,8 @@ export interface StoredInvoiceRecord {
   formaPago?: number;
   tipoMoneda?: string;
   tipoCambio?: number;
+  montoTotal?: number;
+  totalItbis?: number;
   totales: any;
   items: any[];
   references?: any[];
@@ -519,13 +523,25 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     this.seedInitialState();
   }
 
-  async onModuleInit() {
-    // Cargar automáticamente el Tenant Principal y Secuencias desde Supabase
+  public async syncTenantContext(tenantId?: string): Promise<any> {
     try {
-      const dbTenant = await prisma.tenant.findFirst({
-        include: { sequences: { where: { isActive: true } }, subscription: { include: { plan: true } } },
-      });
-      if (dbTenant && dbTenant.rnc) {
+      const dbTenant =
+        tenantId && tenantId !== 'tenant-principal'
+          ? await prisma.tenant.findUnique({
+              where: { id: tenantId },
+              include: {
+                sequences: { where: { isActive: true } },
+                subscription: { include: { plan: true } },
+              },
+            })
+          : await prisma.tenant.findFirst({
+              include: {
+                sequences: { where: { isActive: true } },
+                subscription: { include: { plan: true } },
+              },
+            });
+
+      if (dbTenant) {
         this.tenant.id = dbTenant.id;
         this.tenant.rnc = dbTenant.rnc;
         this.tenant.razonSocial = dbTenant.razonSocial;
@@ -533,15 +549,61 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         this.tenant.direccion = dbTenant.direccion;
         this.tenant.correo = dbTenant.correo;
         this.tenant.telefono = dbTenant.telefono || '';
-        this.tenant.isConfigured = true;
+        this.tenant.isConfigured = Boolean(dbTenant.rnc && dbTenant.razonSocial);
         this.tenant.environment = dbTenant.environment as any;
+        this.tenant.fiscalProvider = (dbTenant.fiscalProvider as any) || 'DGII_DIRECT';
+        if (dbTenant.subscription) {
+          this.tenant.subscription = {
+            ...this.tenant.subscription,
+            planId: dbTenant.subscription.planId,
+            planSlug: dbTenant.subscription.plan?.code || 'MEDIUM',
+            planName: dbTenant.subscription.plan?.name || 'Plan Activo',
+            status: dbTenant.subscription.status,
+            invoiceLimit: dbTenant.subscription.plan?.monthlyInvoiceLimit || 600,
+            invoicesIssuedCount: dbTenant.subscription.invoicesUsedCurrentPeriod || 0,
+          };
+        }
         if (dbTenant.sequences && dbTenant.sequences.length > 0) {
-          this.sequences = dbTenant.sequences;
+          this.sequences = dbTenant.sequences.map((s) => ({
+            ...s,
+            nombreTipo: `e-CF Tipo ${s.tipoEcf}`,
+          }));
         }
       }
-    } catch (e: any) {
-      // Fallback a configuración en memoria si la BD está en mantenimiento
+      return dbTenant;
+    } catch {
+      return null;
     }
+  }
+
+  public async getDgiiConfig(tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    return {
+      tenant: {
+        id: this.tenant.id,
+        rnc: this.tenant.rnc,
+        razonSocial: this.tenant.razonSocial,
+        nombreComercial: this.tenant.nombreComercial,
+        direccion: this.tenant.direccion,
+        telefono: this.tenant.telefono,
+        email: this.tenant.correo,
+        isConfigured: this.tenant.isConfigured,
+        logoBase64: this.tenant.logoBase64,
+        brandColor: this.tenant.brandColor,
+        invoiceFooter: this.tenant.invoiceFooter,
+        fiscalProvider: this.tenant.fiscalProvider,
+        dgiiLiveMode: this.tenant.dgiiLiveMode,
+        contingencyMode: this.tenant.contingencyMode,
+        environment: this.tenant.environment,
+        subscriptionPlan: this.tenant.subscription?.planSlug,
+        subscriptionStatus: this.tenant.subscription?.status,
+      },
+    };
+  }
+
+  async onModuleInit() {
+    // Cargar automáticamente el Tenant Principal y Secuencias desde Supabase
+    await this.syncTenantContext();
 
     this.autoReportTimer = setInterval(() => {
       this.runAutoReportCycle().catch(() => undefined);
@@ -1714,12 +1776,15 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   public async emitInvoice(
     payload: DomainInvoice,
     options: {
+      tenantId?: string;
       apiKey?: string;
       idempotencyKey?: string;
       isAsync?: boolean;
       simulateErrorCode?: number;
     } = {}
   ) {
+    await this.syncTenantContext(options.tenantId);
+
     if (!this.tenant.rnc) {
       throw new BadRequestException({
         statusCode: 400,
@@ -1731,7 +1796,36 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     const { environment } = this.resolveApiKeyAndRateLimit(options.apiKey);
     this.checkSubscriptionQuota();
 
-    const bodyHash = this.cryptoService.hashSha256(JSON.stringify(payload));
+    // Normalizar comprador y líneas cuando vienen desde el formulario web
+    const normalizedItems = (payload.items || []).map((item: any, idx: number) => ({
+      ...item,
+      numeroLinea: item.numeroLinea || idx + 1,
+      indicadorBienServicio: item.indicadorBienServicio || 2,
+      indicadorFacturacion: Number(item.indicadorFacturacion ?? 1),
+      cantidadItem: Number(item.cantidadItem || 1),
+      precioUnitarioItem: Number(item.precioUnitarioItem || 0),
+    }));
+
+    const rawAny = payload as any;
+    const normalizedPayload: DomainInvoice = {
+      ...payload,
+      fechaEmision: payload.fechaEmision || new Date(),
+      indicadorMontoGravado: payload.indicadorMontoGravado ?? 0,
+      tipoIngresos: payload.tipoIngresos || '01',
+      tipoPago: payload.tipoPago ?? 1,
+      formaPago: payload.formaPago ?? 1,
+      comprador:
+        payload.comprador ||
+        (rawAny.rncComprador || rawAny.razonSocialComprador
+          ? {
+              rncComprador: rawAny.rncComprador,
+              razonSocialComprador: rawAny.razonSocialComprador,
+            }
+          : undefined),
+      items: normalizedItems,
+    };
+
+    const bodyHash = this.cryptoService.hashSha256(JSON.stringify(normalizedPayload));
     if (options.idempotencyKey) {
       const cacheKey = `${this.tenant.id}:${options.idempotencyKey}`;
       const existing = this.idempotencyStore.get(cacheKey);
@@ -1751,9 +1845,9 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const { items: calculatedItems, totales } = TaxCalculator.calculateInvoice(payload);
+    const { items: calculatedItems, totales } = TaxCalculator.calculateInvoice(normalizedPayload);
     const enrichedInvoice: DomainInvoice = {
-      ...payload,
+      ...normalizedPayload,
       items: calculatedItems,
       totalesCalculados: totales,
       emisor: {
@@ -1761,8 +1855,8 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         razonSocial: this.tenant.razonSocial,
         direccion: this.tenant.direccion,
         emisorPorDefecto: true,
-        numeroSucursal: payload.emisor?.numeroSucursal || 1,
-        ...payload.emisor,
+        numeroSucursal: normalizedPayload.emisor?.numeroSucursal || 1,
+        ...normalizedPayload.emisor,
       },
     };
 
@@ -1950,6 +2044,61 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       this.invoices.unshift(record);
       this.tenant.subscription.invoicesIssuedCount += 1;
 
+      // Persistir en Supabase PostgreSQL para disponibilidad 24/7
+      try {
+        const dbStatus = (['ACCEPTED', 'CONDITIONAL', 'REJECTED', 'ERROR', 'QUEUED', 'CONTINGENCY_PENDING'].includes(String(record.status))
+          ? record.status
+          : 'ACCEPTED') as any;
+
+        const dbInvoice = await prisma.invoice.upsert({
+          where: {
+            tenantId_environment_encf: {
+              tenantId: this.tenant.id,
+              environment: record.environment as any,
+              encf: record.encf,
+            },
+          },
+          update: {
+            status: dbStatus,
+            urlQr: record.urlQr,
+            codigoSeguridad: record.codigoSeguridad,
+            xmlHash: record.xmlHash,
+            xmlStorageKey: record.xmlStorageKey,
+            montoTotal: record.totales?.montoTotal || 0,
+            totalItbis: record.totales?.totalItbis || 0,
+            montoGravadoTotal: record.totales?.montoGravadoTotal || 0,
+            gtiRawResponse: emissionResult.rawResponse || undefined,
+          },
+          create: {
+            id: record.id,
+            tenantId: this.tenant.id,
+            environment: record.environment as any,
+            tipoEcf: record.tipoEcf,
+            encf: record.encf,
+            externalDocId: record.externalDocId,
+            status: dbStatus,
+            indicadorMontoGravado: record.indicadorMontoGravado ?? 0,
+            tipoPago: record.tipoPago ?? 1,
+            fechaEmision: new Date(),
+            rncComprador: record.rncComprador,
+            razonSocialComprador: record.razonSocialComprador || 'Consumidor Final',
+            identificadorExtranjero: record.identificadorExtranjero,
+            montoGravadoTotal: record.totales?.montoGravadoTotal || 0,
+            totalItbis: record.totales?.totalItbis || 0,
+            montoExento: record.totales?.montoExento || 0,
+            montoTotal: record.totales?.montoTotal || 0,
+            urlQr: record.urlQr,
+            codigoSeguridad: record.codigoSeguridad,
+            xmlHash: record.xmlHash,
+            xmlStorageKey: record.xmlStorageKey,
+            gtiRawResponse: emissionResult.rawResponse || undefined,
+          },
+        });
+        record.id = dbInvoice.id;
+      } catch {
+        // Fallback silencioso si la BD no está accesible en pruebas locales
+      }
+
       if (record.tipoEcf === 32 && record.totales.montoTotal < 250_000) {
         this.rfceQueue.push({
           encf: record.encf,
@@ -2034,28 +2183,118 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  public getInvoices(filters?: { tipoEcf?: number; status?: string; environment?: string }) {
-    return this.enforceRlsScope(this.invoices).filter((inv) => {
-      if (filters?.tipoEcf && inv.tipoEcf !== Number(filters.tipoEcf)) return false;
-      if (filters?.status && inv.status !== filters.status) return false;
-      if (filters?.environment && inv.environment !== filters.environment) return false;
-      return true;
-    });
+  public async getInvoices(
+    filters?: { tipoEcf?: number; status?: string; environment?: string },
+    tenantId?: string
+  ): Promise<any[]> {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+
+    try {
+      const where: any = { tenantId: effectiveTenantId };
+      if (filters?.tipoEcf) where.tipoEcf = Number(filters.tipoEcf);
+      if (filters?.status) where.status = filters.status;
+      if (filters?.environment) where.environment = filters.environment;
+
+      const dbRows = await prisma.invoice.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return dbRows.map((inv: any) => ({
+        id: inv.id,
+        tenantId: inv.tenantId,
+        environment: inv.environment,
+        tipoEcf: inv.tipoEcf,
+        encf: inv.encf,
+        externalDocId: inv.externalDocId,
+        status: inv.status,
+        fechaEmision: inv.fechaEmision ? inv.fechaEmision.toISOString().split('T')[0] : '',
+        rncEmisor: this.tenant.rnc,
+        razonSocialEmisor: this.tenant.razonSocial,
+        rncComprador: inv.rncComprador,
+        razonSocialComprador: inv.razonSocialComprador,
+        identificadorExtranjero: inv.identificadorExtranjero,
+        formaPago: inv.tipoPago || 1,
+        montoTotal: Number(inv.montoTotal || 0),
+        totalItbis: Number(inv.totalItbis || 0),
+        montoGravadoTotal: Number(inv.montoGravadoTotal || 0),
+        totales: {
+          montoTotal: Number(inv.montoTotal || 0),
+          totalItbis: Number(inv.totalItbis || 0),
+          montoGravadoTotal: Number(inv.montoGravadoTotal || 0),
+          montoExento: Number(inv.montoExento || 0),
+        },
+        urlQr: inv.urlQr,
+        codigoSeguridad: inv.codigoSeguridad,
+        xmlHash: inv.xmlHash,
+        createdAt: inv.createdAt?.toISOString?.() || inv.createdAt,
+      }));
+    } catch {
+      return this.enforceRlsScope(this.invoices, effectiveTenantId).filter((inv) => {
+        if (filters?.tipoEcf && inv.tipoEcf !== Number(filters.tipoEcf)) return false;
+        if (filters?.status && inv.status !== filters.status) return false;
+        if (filters?.environment && inv.environment !== filters.environment) return false;
+        return true;
+      });
+    }
   }
 
-  public getInvoiceById(id: string) {
-    const found = this.enforceRlsScope(this.invoices).find((i) => i.id === id || i.encf === id);
+  public async getInvoiceById(id: string, tenantId?: string): Promise<any> {
+    if (tenantId) await this.syncTenantContext(tenantId);
+    try {
+      const dbInv = await prisma.invoice.findFirst({
+        where: {
+          OR: [{ id }, { encf: id }],
+          ...(tenantId ? { tenantId } : {}),
+        },
+        include: { tenant: true, items: true },
+      });
+
+      if (dbInv) {
+        return {
+          id: dbInv.id,
+          tenantId: dbInv.tenantId,
+          environment: dbInv.environment as 'SANDBOX' | 'PRODUCTION',
+          tipoEcf: dbInv.tipoEcf,
+          encf: dbInv.encf || '',
+          externalDocId: dbInv.externalDocId || undefined,
+          status: dbInv.status,
+          fechaEmision: dbInv.fechaEmision ? dbInv.fechaEmision.toISOString().split('T')[0] : '',
+          rncEmisor: dbInv.tenant?.rnc || this.tenant.rnc,
+          razonSocialEmisor: dbInv.tenant?.razonSocial || this.tenant.razonSocial,
+          rncComprador: dbInv.rncComprador || undefined,
+          razonSocialComprador: dbInv.razonSocialComprador || 'Consumidor Final',
+          montoTotal: Number(dbInv.montoTotal || 0),
+          totalItbis: Number(dbInv.totalItbis || 0),
+          montoGravadoTotal: Number(dbInv.montoGravadoTotal || 0),
+          totales: {
+            montoTotal: Number(dbInv.montoTotal || 0),
+            totalItbis: Number(dbInv.totalItbis || 0),
+            montoGravadoTotal: Number(dbInv.montoGravadoTotal || 0),
+            montoExento: Number(dbInv.montoExento || 0),
+          },
+          items: dbInv.items || [],
+          urlQr: dbInv.urlQr || undefined,
+          codigoSeguridad: dbInv.codigoSeguridad || undefined,
+          xmlSigned: undefined as string | undefined,
+          xmlHash: dbInv.xmlHash || undefined,
+        };
+      }
+    } catch {}
+
+    const found = this.enforceRlsScope(this.invoices, tenantId).find((i) => i.id === id || i.encf === id);
     if (!found) {
       throw new NotFoundException(`Comprobante ${id} no encontrado.`);
     }
     return found;
   }
 
-  public async checkInvoiceStatus(id: string) {
-    const inv = this.getInvoiceById(id);
+  public async checkInvoiceStatus(id: string, tenantId?: string): Promise<any> {
+    const inv = await this.getInvoiceById(id, tenantId);
     const provider = this.getProviderAdapter(this.tenant.fiscalProvider);
     const res = await provider.checkStatus(
-      { rnc: this.tenant.rnc, environment: inv.environment },
+      { rnc: inv.rncEmisor || this.tenant.rnc, environment: inv.environment },
       inv.encf
     );
     this.pushAuditLog({
@@ -2067,24 +2306,27 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       requestPayload: { encf: inv.encf },
       responsePayload: res,
     });
-    return res;
+    return {
+      ...inv,
+      ...res,
+    };
   }
 
-  public async getInvoicePdf(id: string, template = 1): Promise<Buffer> {
-    const inv = this.getInvoiceById(id);
+  public async getInvoicePdf(id: string, template = 1, tenantId?: string): Promise<Buffer> {
+    const inv = await this.getInvoiceById(id, tenantId);
     const provider = this.getProviderAdapter(this.tenant.fiscalProvider);
     return provider.downloadPdf(
-      { rnc: this.tenant.rnc, environment: inv.environment },
+      { rnc: inv.rncEmisor || this.tenant.rnc, environment: inv.environment },
       inv.encf,
       template
     );
   }
 
-  public getInvoiceXml(id: string): { encf: string; xml: string; sha256: string } {
-    const inv = this.getInvoiceById(id);
+  public async getInvoiceXml(id: string, tenantId?: string): Promise<{ encf: string; xml: string; sha256: string }> {
+    const inv = await this.getInvoiceById(id, tenantId);
     const xml =
       inv.xmlSigned ||
-      `<?xml version="1.0" encoding="utf-8"?><eCF><eNCF>${inv.encf}</eNCF><Status>${inv.status}</Status></eCF>`;
+      `<?xml version="1.0" encoding="utf-8"?><eCF><Encabezado><IdDoc><TipoeCF>${inv.tipoEcf}</TipoeCF><eNCF>${inv.encf}</eNCF></IdDoc><Emisor><RNCEmisor>${inv.rncEmisor || this.tenant.rnc}</RNCEmisor><RazonSocialEmisor>${inv.razonSocialEmisor || this.tenant.razonSocial}</RazonSocialEmisor></Emisor><Totales><TotalITBIS>${inv.totalItbis}</TotalITBIS><MontoTotal>${inv.montoTotal}</MontoTotal></Totales></Encabezado></eCF>`;
     return {
       encf: inv.encf,
       xml,
@@ -2092,9 +2334,26 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  public getSequences() {
-    return this.enforceRlsScope(this.sequences).map((seq) => {
-      const total = seq.consecutivoHasta - seq.consecutivoDesde + 1;
+  public async getSequences(tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    let sourceSeqs = this.enforceRlsScope(this.sequences, effectiveTenantId);
+
+    try {
+      const dbSeqs = await prisma.ecfSequence.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: [{ tipoEcf: 'asc' }, { idRangoSecuencia: 'asc' }],
+      });
+      if (dbSeqs.length > 0) {
+        sourceSeqs = dbSeqs.map((s) => ({
+          ...s,
+          nombreTipo: `e-CF Tipo ${s.tipoEcf}`,
+        }));
+      }
+    } catch {}
+
+    return sourceSeqs.map((seq) => {
+      const total = Math.max(1, seq.consecutivoHasta - seq.consecutivoDesde + 1);
       const used = Math.max(0, seq.ultimoConsecutivo - seq.consecutivoDesde + 1);
       const remaining = Math.max(0, seq.consecutivoHasta - seq.ultimoConsecutivo);
       const percentRemaining = Math.round((remaining / total) * 100);
@@ -2114,27 +2373,65 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  public registerSequence(data: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION' }) {
-    const env = data.environment || this.tenant.environment;
+  public async registerSequence(
+    data: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION' },
+    tenantId?: string
+  ) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    const env = (data.environment || this.tenant.environment || 'SANDBOX') as 'SANDBOX' | 'PRODUCTION';
     const tipo = Number(data.IdTipoDocumento);
-    const existingIdx = this.sequences.findIndex(
-      (s) => s.tipoEcf === tipo && s.idRangoSecuencia === data.IdRangoSecuencia && s.environment === env
-    );
+    const idRango = Number(data.IdRangoSecuencia || 1);
 
-    const newSeq = {
-      id: `seq-${tipo}-${data.IdRangoSecuencia}`,
-      tenantId: this.tenant.id,
+    let newSeq: any = {
+      id: `seq-${tipo}-${idRango}`,
+      tenantId: effectiveTenantId,
       environment: env,
       tipoEcf: tipo,
       nombreTipo: `e-CF Tipo ${tipo}`,
-      idRangoSecuencia: Number(data.IdRangoSecuencia),
+      idRangoSecuencia: idRango,
       consecutivoDesde: Number(data.ConsecutivoDesde),
       consecutivoHasta: Number(data.ConsecutivoHasta),
-      ultimoConsecutivo: Number(data.UltimoConsecutivo),
-      fechaVencimiento: data.Vencimiento || null,
+      ultimoConsecutivo: Number(data.UltimoConsecutivo || 0),
+      fechaVencimiento: data.Vencimiento ? new Date(data.Vencimiento) : null,
       isActive: true,
     };
 
+    try {
+      const saved = await prisma.ecfSequence.upsert({
+        where: {
+          tenantId_environment_tipoEcf_idRangoSecuencia: {
+            tenantId: effectiveTenantId,
+            environment: env as any,
+            tipoEcf: tipo,
+            idRangoSecuencia: idRango,
+          },
+        },
+        update: {
+          consecutivoDesde: newSeq.consecutivoDesde,
+          consecutivoHasta: newSeq.consecutivoHasta,
+          ultimoConsecutivo: newSeq.ultimoConsecutivo,
+          fechaVencimiento: newSeq.fechaVencimiento,
+          isActive: true,
+        },
+        create: {
+          tenantId: effectiveTenantId,
+          environment: env as any,
+          tipoEcf: tipo,
+          idRangoSecuencia: idRango,
+          consecutivoDesde: newSeq.consecutivoDesde,
+          consecutivoHasta: newSeq.consecutivoHasta,
+          ultimoConsecutivo: newSeq.ultimoConsecutivo,
+          fechaVencimiento: newSeq.fechaVencimiento,
+          isActive: true,
+        },
+      });
+      newSeq = { ...saved, nombreTipo: `e-CF Tipo ${saved.tipoEcf}` };
+    } catch {}
+
+    const existingIdx = this.sequences.findIndex(
+      (s) => s.tipoEcf === tipo && s.idRangoSecuencia === idRango && s.environment === env
+    );
     if (existingIdx >= 0) {
       this.sequences[existingIdx] = newSeq;
     } else {
@@ -2234,10 +2531,16 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  public getDashboardSummary() {
-    const seqs = this.getSequences();
-    const scopedInvoices = this.enforceRlsScope(this.invoices);
-    const scopedPurchases = this.enforceRlsScope(this.receivedPurchases);
+  public async getDashboardSummary(tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    const seqs = await this.getSequences(effectiveTenantId);
+    const scopedInvoices = await this.getInvoices({}, effectiveTenantId);
+    let scopedPurchases: any[] = this.enforceRlsScope(this.receivedPurchases, effectiveTenantId);
+    try {
+      const dbPur = await prisma.receivedPurchase.findMany({ where: { tenantId: effectiveTenantId } });
+      if (dbPur.length > 0) scopedPurchases = dbPur;
+    } catch {}
     const scopedCustomers = this.enforceRlsScope(this.customers);
     const scopedProducts = this.enforceRlsScope(this.products);
     const scopedApiKeys = this.enforceRlsScope(this.apiKeys);
@@ -2324,27 +2627,33 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  public updateTenantSettings(body: {
-    environment?: 'SANDBOX' | 'PRODUCTION';
-    fiscalProvider?: 'GTI' | 'DGII_DIRECT' | 'SIMULATOR';
-    fiscalProviderFallback?: 'NONE' | 'GTI' | 'SIMULATOR';
-    contingencyMode?: boolean;
-    razonSocial?: string;
-    nombreComercial?: string;
-    rnc?: string;
-    direccion?: string;
-    correo?: string;
-    telefono?: string;
-    provinciaCodigo?: string;
-    municipioCodigo?: string;
-    gtiUsuario?: string;
-    gtiClave?: string;
-    medioEmision?: string;
-    planSlug?: string;
-    logoBase64?: string | null;
-    brandColor?: string;
-    invoiceFooter?: string;
-  }) {
+  public async updateTenantSettings(
+    body: {
+      environment?: 'SANDBOX' | 'PRODUCTION';
+      fiscalProvider?: 'GTI' | 'DGII_DIRECT' | 'SIMULATOR';
+      fiscalProviderFallback?: 'NONE' | 'GTI' | 'SIMULATOR';
+      contingencyMode?: boolean;
+      razonSocial?: string;
+      nombreComercial?: string;
+      rnc?: string;
+      direccion?: string;
+      correo?: string;
+      telefono?: string;
+      provinciaCodigo?: string;
+      municipioCodigo?: string;
+      gtiUsuario?: string;
+      gtiClave?: string;
+      medioEmision?: string;
+      planSlug?: string;
+      logoBase64?: string | null;
+      brandColor?: string;
+      invoiceFooter?: string;
+    },
+    tenantId?: string
+  ) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+
     if (body.rnc !== undefined) {
       const cleanRnc = body.rnc.replace(/\D/g, '');
       if (cleanRnc && ![9, 11].includes(cleanRnc.length)) {
@@ -2404,6 +2713,25 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         this.tenant.subscription.planName = plan.name;
         this.tenant.subscription.invoiceLimit = plan.invoiceLimit;
       }
+    }
+
+    // Persistir cambios en Supabase PostgreSQL
+    if (effectiveTenantId && effectiveTenantId !== 'tenant-principal') {
+      try {
+        await prisma.tenant.update({
+          where: { id: effectiveTenantId },
+          data: {
+            rnc: this.tenant.rnc || undefined,
+            razonSocial: this.tenant.razonSocial || undefined,
+            nombreComercial: this.tenant.nombreComercial || undefined,
+            direccion: this.tenant.direccion || undefined,
+            correo: this.tenant.correo || undefined,
+            telefono: this.tenant.telefono || undefined,
+            environment: this.tenant.environment as any,
+            fiscalProvider: this.tenant.fiscalProvider as any,
+          },
+        });
+      } catch {}
     }
 
     return { success: true, tenant: this.tenant };
@@ -2560,15 +2888,115 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private normalizeReceivedPurchase(p: any) {
+    if ('rncEmisor' in p && 'encf' in p) {
+      const montoTotal = Number(p.montoTotal || 0);
+      const itbis = Number(p.totalItbis || 0);
+      const neto = Math.max(0, Number((montoTotal - itbis).toFixed(2)));
+      return {
+        rncProveedor: p.rncEmisor,
+        nombreProveedor: p.razonSocialEmisor || `RNC ${p.rncEmisor}`,
+        rncComprador: this.tenant.rnc || '',
+        razonSocialComprador: this.tenant.razonSocial || '',
+        tipoId: String(p.rncEmisor || '').length === 9 ? 1 : 2,
+        tipoGasto606: p.tipoGasto606 || '02',
+        ncf: p.encf,
+        fechaComprobante: p.fechaEmision || '',
+        montoServicios: neto,
+        montoBienes: 0,
+        montoFacturado: neto,
+        itbisFacturado: itbis,
+        itbisRetenido: 0,
+        itbisPorAdelantar: itbis,
+        itbisLlevadoAlCosto: 0,
+        tipoRetencionIsr: '',
+        isrRetenido: 0,
+        formaPago: 1,
+        estadoDgii: p.commercialStatus || 'Aceptado',
+      };
+    }
+    return {
+      rncProveedor: p.rncProveedor || '',
+      nombreProveedor: p.nombreProveedor || '',
+      rncComprador: p.rncComprador || this.tenant.rnc || '',
+      razonSocialComprador: p.razonSocialComprador || this.tenant.razonSocial || '',
+      tipoId: p.tipoId || 1,
+      tipoGasto606: p.tipoGasto606 || '02',
+      ncf: p.ncf || '',
+      fechaComprobante: p.fechaComprobante || '',
+      montoServicios: Number(p.montoServicios || 0),
+      montoBienes: Number(p.montoBienes || 0),
+      montoFacturado: Number(p.montoFacturado || 0),
+      itbisFacturado: Number(p.itbisFacturado || 0),
+      itbisRetenido: Number(p.itbisRetenido || 0),
+      itbisPorAdelantar: Number(p.itbisPorAdelantar ?? p.itbisFacturado ?? 0),
+      itbisLlevadoAlCosto: Number(p.itbisLlevadoAlCosto || 0),
+      tipoRetencionIsr: p.tipoRetencionIsr || '',
+      isrRetenido: Number(p.isrRetenido || 0),
+      formaPago: p.formaPago || 1,
+      estadoDgii: p.estadoDgii || 'Aceptado',
+    };
+  }
+
+  public async getDgiiPurchases(tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    try {
+      const dbPur = await prisma.receivedPurchase.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      return dbPur.map((p) => ({
+        id: p.id,
+        rnc: p.rncEmisor,
+        rncEmisor: p.rncEmisor,
+        razonSocial: p.razonSocialEmisor,
+        razonSocialEmisor: p.razonSocialEmisor,
+        encf: p.encf,
+        fecha: p.fechaEmision,
+        fechaEmision: p.fechaEmision,
+        tipoGasto: p.tipoGasto606,
+        tipoGasto606: p.tipoGasto606,
+        totalItbis: Number(p.totalItbis || 0),
+        montoTotal: Number(p.montoTotal || 0),
+        commercialStatus: p.commercialStatus,
+      }));
+    } catch {
+      return this.enforceRlsScope(this.receivedPurchases, effectiveTenantId).map((p) => ({
+        id: p.id,
+        rnc: p.rncProveedor,
+        razonSocial: p.nombreProveedor,
+        encf: p.ncf,
+        fecha: p.fechaComprobante,
+        tipoGasto: p.tipoGasto606,
+        totalItbis: Number(p.itbisFacturado || 0),
+        montoTotal: Number(p.montoFacturado || 0) + Number(p.itbisFacturado || 0),
+      }));
+    }
+  }
+
   /**
    * Genera automáticamente los Formatos Oficiales DGII 606, 607, 608, 609, IT-1 e IR-17.
    */
-  public generateDgiiReports(period = '202611') {
+  public async generateDgiiReports(period = '202611', tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
     const salesTypes = [31, 32, 33, 34, 44, 45, 46];
     const purchaseEcfTypes = [41, 43];
     const rncEmisor = this.tenant.rnc || '000000000';
-    const scopedInvoices = this.enforceRlsScope(this.invoices);
-    const scopedReceived = this.enforceRlsScope(this.receivedPurchases);
+    const scopedInvoices = await this.getInvoices({}, effectiveTenantId);
+
+    let rawPurchases: any[] = this.enforceRlsScope(this.receivedPurchases, effectiveTenantId);
+    try {
+      const dbPur = await prisma.receivedPurchase.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (dbPur.length > 0) {
+        rawPurchases = dbPur;
+      }
+    } catch {}
+    const scopedReceived = rawPurchases.map((p) => this.normalizeReceivedPurchase(p));
 
     const salesInvoices = scopedInvoices.filter(
       (i) => salesTypes.includes(i.tipoEcf) && i.status !== 'REJECTED'
@@ -2760,10 +3188,23 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
    * - Hoja 2: Ventas_607
    * - Hoja 3: Resumen_IT1_IR17
    */
-  public generateAccountantExcelReport(period: string): { filename: string; xmlWorkbook: string } {
-    const reports = this.generateDgiiReports(period);
-    const scopedPurchases = this.enforceRlsScope(this.receivedPurchases);
-    const scopedSales = this.enforceRlsScope(this.invoices).filter((i) => i.status !== 'REJECTED');
+  public async generateAccountantExcelReport(
+    period: string,
+    tenantId?: string
+  ): Promise<{ filename: string; xmlWorkbook: string }> {
+    const reports = await this.generateDgiiReports(period, tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    let rawPurchases: any[] = this.enforceRlsScope(this.receivedPurchases, effectiveTenantId);
+    try {
+      const dbPur = await prisma.receivedPurchase.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (dbPur.length > 0) rawPurchases = dbPur;
+    } catch {}
+    const scopedPurchases = rawPurchases.map((p) => this.normalizeReceivedPurchase(p));
+    const allInvoices = await this.getInvoices({}, effectiveTenantId);
+    const scopedSales = allInvoices.filter((i: any) => i.status !== 'REJECTED');
 
     const esc = (val: unknown) =>
       String(val ?? '')

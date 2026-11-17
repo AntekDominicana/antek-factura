@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
-import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle, KeyRound, UserCheck } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,10 +31,9 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.message || 'Credenciales inválidas en Supabase.');
+        throw new Error(data.message || 'Credenciales inválidas.');
       }
 
-      // Guardar datos de usuario en localStorage
       if (data.user) {
         localStorage.setItem('antek_user', JSON.stringify(data.user));
         if (data.accessToken) {
@@ -42,19 +41,12 @@ export default function LoginPage() {
         }
       }
 
-      // Redirigir al dashboard protegido
       router.push('/app/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Error al autenticar contra Supabase.');
+      setError(err.message || 'Error al iniciar sesión. Verifica tus credenciales.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleFillCredentials = (user: string, pass: string) => {
-    setIdentifier(user);
-    setPassword(pass);
-    setError(null);
   };
 
   return (
@@ -78,7 +70,7 @@ export default function LoginPage() {
           <div className="space-y-1 text-center">
             <h1 className="text-2xl font-black text-white">Iniciar Sesión</h1>
             <p className="text-xs text-slate-400">
-              Autenticación real cifrada con base de datos en Supabase
+              Accede a tu portal de facturación electrónica e-CF (DGII Ley 32-23)
             </p>
           </div>
 
@@ -102,9 +94,10 @@ export default function LoginPage() {
                 <input
                   type="text"
                   required
+                  autoComplete="username"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="rootfacturas o juanperez@antek.com.do"
+                  placeholder="correo@tuempresa.com.do"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-hidden focus:border-sky-500"
                 />
               </div>
@@ -125,6 +118,7 @@ export default function LoginPage() {
                 <input
                   type="password"
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
@@ -138,49 +132,14 @@ export default function LoginPage() {
               disabled={loading}
               className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center justify-center gap-1.5 transition disabled:opacity-50"
             >
-              <span>{loading ? 'Verificando en Supabase...' : 'Entrar a ANTEK Factura'}</span>
+              <span>{loading ? 'Verificando acceso...' : 'Entrar a ANTEK Factura'}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
-          {/* Cuentas Configuradas en Supabase */}
-          <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
-            <p className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5 text-sky-400" />
-              Cuentas autorizadas registradas en Supabase:
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => handleFillCredentials('rootfacturas', 'RootFacturas2026!')}
-                className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-sky-500/50 text-left transition flex flex-col gap-0.5 group"
-              >
-                <span className="font-bold text-sky-400 group-hover:text-sky-300 flex items-center gap-1">
-                  <UserCheck className="w-3 h-3" />
-                  Admin Root
-                </span>
-                <span className="text-[10px] text-slate-400 truncate">rootfacturas</span>
-                <span className="text-[9px] text-slate-500">Pass: RootFacturas2026!</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleFillCredentials('juanperez@antek.com.do', 'JuanPerez2026!')}
-                className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-sky-500/50 text-left transition flex flex-col gap-0.5 group"
-              >
-                <span className="font-bold text-emerald-400 group-hover:text-emerald-300 flex items-center gap-1">
-                  <UserCheck className="w-3 h-3" />
-                  Cliente / Admin
-                </span>
-                <span className="text-[10px] text-slate-400 truncate">juanperez@antek.com.do</span>
-                <span className="text-[9px] text-slate-500">Pass: JuanPerez2026!</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500">
+          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 pt-2 border-t border-slate-800/80">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Validación criptográfica bcrypt + Supabase PostgreSQL RLS</span>
+            <span>Conexión cifrada TLS + Autenticación bcrypt &amp; PostgreSQL RLS</span>
           </div>
         </div>
       </main>

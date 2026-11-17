@@ -18,6 +18,7 @@ import {
   Lock,
   Layers,
 } from 'lucide-react';
+import { apiFetch } from '../../../lib/api';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -26,7 +27,6 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Cargar usuario desde localStorage o backend
     const stored = localStorage.getItem('antek_user');
     if (stored) {
       try {
@@ -34,9 +34,7 @@ export default function ProfilePage() {
       } catch {}
     }
 
-    // Consultar estado de suscripción y perfil al día
-    fetch('http://localhost:4000/v1/billing/subscription')
-      .then((res) => (res.ok ? res.json() : null))
+    apiFetch<any>('/v1/billing/subscription')
       .then((data) => {
         if (data) setSubscription(data);
       })
@@ -89,9 +87,9 @@ export default function ProfilePage() {
             </div>
             <div className="min-w-0">
               <h3 className="font-bold text-white text-sm truncate">
-                {user?.fullName || 'Usuario ANTEK'}
+                {user?.fullName || 'Usuario'}
               </h3>
-              <p className="text-xs text-slate-400 truncate">{user?.email || 'usuario@antek.com.do'}</p>
+              <p className="text-xs text-slate-400 truncate">{user?.email || '—'}</p>
               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
                 <Shield className="w-3 h-3" />
                 Rol: {user?.role || 'ADMIN'}
@@ -105,14 +103,14 @@ export default function ProfilePage() {
                 <Building2 className="w-3.5 h-3.5 text-slate-500" />
                 Empresa Contribuyente:
               </span>
-              <span className="font-semibold text-white">{user?.tenantName || 'ANTEK DOMINICANA SRL'}</span>
+              <span className="font-semibold text-white">{user?.tenantName || 'No configurada'}</span>
             </div>
             <div className="flex items-center justify-between text-slate-300">
               <span className="text-slate-400 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-slate-500" />
                 RNC Fiscal:
               </span>
-              <span className="font-mono font-semibold text-sky-400">{user?.rnc || '131880738'}</span>
+              <span className="font-mono font-semibold text-sky-400">{user?.rnc || '—'}</span>
             </div>
             <div className="flex items-center justify-between text-slate-300">
               <span className="text-slate-400 flex items-center gap-1.5">

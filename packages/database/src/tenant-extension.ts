@@ -132,7 +132,7 @@ export async function allocateNextConsecutivePessimistic(
   return prismaClient.$transaction(async (tx) => {
     // 1. Bloqueo pesimista de fila en PostgreSQL para serializar la asignación
     const rows: any[] = await tx.$queryRaw`
-      SELECT id, "tipoEcf", "serie", "secuencialInicial", "secuencialFinal", "ultimoConsecutivo", "fechaVencimiento"
+      SELECT id, "tipoEcf", "idRangoSecuencia", "consecutivoDesde", "consecutivoHasta", "ultimoConsecutivo", "fechaVencimiento"
       FROM "EcfSequence"
       WHERE "tenantId" = ${tenantId}
         AND "tipoEcf" = ${tipoEcf}
@@ -157,12 +157,12 @@ export async function allocateNextConsecutivePessimistic(
       );
     }
 
-    const nextConsecutive = Number(seq.ultimoConsecutivo) + 1;
+    const nextConsecutive = Math.max(Number(seq.ultimoConsecutivo) + 1, Number(seq.consecutivoDesde || 1));
 
     // 3. Verificar agotamiento del rango autorizado
-    if (nextConsecutive > Number(seq.secuencialFinal)) {
+    if (nextConsecutive > Number(seq.consecutivoHasta)) {
       throw new Error(
-        `Rango de e-NCF agotado para tipo ${tipoEcf} (límite autorizado: ${seq.secuencialFinal}). Solicite un nuevo rango en DGII.`
+        `Rango de e-NCF agotado para tipo ${tipoEcf} (límite autorizado: ${seq.consecutivoHasta}). Solicite un nuevo rango en DGII.`
       );
     }
 

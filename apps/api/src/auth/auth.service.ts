@@ -20,18 +20,21 @@ export class AuthService {
   ) {}
 
   /**
-   * Registro inicial de Tenant + Usuario Administrador + Sucursal Principal
+   * Registro inicial de Tenant + Usuario Administrador + Sucursal Principal + Secuencias iniciales
    */
-  async register(dto: {
-    rnc: string;
-    razonSocial: string;
-    nombreComercial?: string;
-    direccion: string;
-    correo: string;
-    fullName: string;
-    password: string;
-    planCode?: string;
-  }) {
+  async register(
+    dto: {
+      rnc: string;
+      razonSocial: string;
+      nombreComercial?: string;
+      direccion?: string;
+      correo: string;
+      fullName: string;
+      password: string;
+      planCode?: string;
+    },
+    meta: { userAgent?: string; ipAddress?: string } = {}
+  ) {
     const cleanRnc = dto.rnc.replace(/\D/g, '');
     if (cleanRnc.length !== 9 && cleanRnc.length !== 11) {
       throw new BadRequestException('El RNC debe tener 9 dígitos y la Cédula 11 dígitos numéricos.');
@@ -41,52 +44,123 @@ export class AuthService {
       throw new BadRequestException('La contraseña debe tener al menos 8 caracteres.');
     }
 
+    const cleanEmail = dto.correo.toLowerCase().trim();
+    const direccionFiscal = (dto.direccion || 'República Dominicana').trim();
+
     const existingTenant = await prisma.tenant.findUnique({ where: { rnc: cleanRnc } });
     if (existingTenant) {
       throw new BadRequestException(`El RNC ${cleanRnc} ya se encuentra registrado en la plataforma.`);
     }
 
+    const existingUser = await prisma.tenantUser.findFirst({ where: { email: cleanEmail } });
+    if (existingUser) {
+      throw new BadRequestException(`El correo ${cleanEmail} ya se encuentra registrado.`);
+    }
+
     const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(dto.password, salt);
 
-    // Buscar plan solicitado o BASIC por defecto
-    const plan = await prisma.plan.findUnique({
-      where: { code: dto.planCode || 'BASIC' },
+    const requestedCode = (dto.planCode || 'MEDIUM').toUpperCase();
+    const planSpecs: Record<string, any> = {
+      BASIC: {
+        name: 'Plan Básico',
+        description: 'Ideal para profesionales independientes y pymes',
+        priceDop: 990,
+        priceUsd: 18,
+        monthlyInvoiceLimit: 100,
+        maxUsers: 2,
+        maxBranches: 1,
+        allowedEcfTypes: [31, 32, 33, 34, 41, 43],
+        apiAccess: false,
+      },
+      MEDIUM: {
+        name: 'Plan Medio',
+        description: 'Para empresas en crecimiento con acceso API',
+        priceDop: 2450,
+        priceUsd: 45,
+        monthlyInvoiceLimit: 600,
+        maxUsers: 5,
+        maxBranches: 3,
+        allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
+        apiAccess: true,
+      },
+      PRO: {
+        name: 'Plan Pro',
+        description: 'Gama completa e-CF DGII y alta concurrencia',
+        priceDop: 4900,
+        priceUsd: 89,
+        monthlyInvoiceLimit: 3000,
+        maxUsers: 25,
+        maxBranches: 10,
+        allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47],
+        apiAccess: true,
+      },
+    };
+    const spec = planSpecs[requestedCode] || planSpecs.MEDIUM;
+    const planCode = planSpecs[requestedCode] ? requestedCode : 'MEDIUM';
+
+    const plan = await prisma.plan.upsert({
+      where: { code: planCode },
+      update: {},
+      create: {
+        code: planCode,
+        ...spec,
+        isActive: true,
+      },
     });
+
+    const expirationDate = new Date();
+    expirationDate.setFullYear(expirationDate.getFullYear() + 1);
 
     const tenant = await prisma.tenant.create({
       data: {
         rnc: cleanRnc,
         razonSocial: dto.razonSocial.trim(),
-        nombreComercial: dto.nombreComercial?.trim(),
-        direccion: dto.direccion.trim(),
-        correo: dto.correo.toLowerCase().trim(),
+        nombreComercial: dto.nombreComercial?.trim() || dto.razonSocial.trim(),
+        direccion: direccionFiscal,
+        correo: cleanEmail,
+        dataCollectionConsent: true,
+        termsAcceptedVersion: 'v1.0-2026',
+        termsAcceptedAt: new Date(),
         branches: {
           create: {
             numeroSucursal: 1,
             nombre: 'Sede Principal',
-            direccion: dto.direccion.trim(),
+            direccion: direccionFiscal,
             isDefault: true,
           },
         },
         users: {
           create: {
-            email: dto.correo.toLowerCase().trim(),
+            email: cleanEmail,
             fullName: dto.fullName.trim(),
             passwordHash,
             role: UserRole.ADMIN,
             isActive: true,
-            emailVerified: false,
+            emailVerified: true,
           },
         },
         subscription: {
           create: {
-            planId: plan?.id || 'default-plan',
-            status: 'TRIAL',
+            planId: plan.id,
+            status: 'ACTIVE',
             currentPeriodStart: new Date(),
-            currentPeriodEnd: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 días de prueba
+            currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            gracePeriodEndsAt: new Date(Date.now() + 35 * 24 * 60 * 60 * 1000),
             invoicesUsedCurrentPeriod: 0,
           },
+        },
+        sequences: {
+          create: [31, 32, 33, 34, 41, 43].map((tipoEcf) => ({
+            environment: 'SANDBOX',
+            tipoEcf,
+            idRangoSecuencia: 1,
+            consecutivoDesde: 1,
+            consecutivoHasta: 50000,
+            ultimoConsecutivo: 0,
+            fechaVencimiento: expirationDate,
+            isActive: true,
+          })),
         },
       },
       include: {
@@ -98,16 +172,29 @@ export class AuthService {
 
     const user = tenant.users[0];
 
-    // Token de verificación de correo
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = this.cryptoService.hashSha256(rawToken);
+    // Emitir Access Token y Refresh Token inmediatamente para iniciar sesión tras el registro
+    const accessToken = this.jwtService.sign(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        tenantId: tenant.id,
+        rnc: tenant.rnc,
+        environment: tenant.environment,
+      },
+      { expiresIn: '7d' }
+    );
 
-    await prisma.verificationToken.create({
+    const rawRefreshToken = crypto.randomBytes(40).toString('hex');
+    const refreshTokenHash = this.cryptoService.hashSha256(rawRefreshToken);
+
+    await prisma.userSession.create({
       data: {
         userId: user.id,
-        tokenHash,
-        type: VerificationTokenType.EMAIL_VERIFICATION,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        refreshTokenHash,
+        userAgent: meta.userAgent,
+        ipAddress: meta.ipAddress,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
     });
 
@@ -117,7 +204,21 @@ export class AuthService {
       tenantId: tenant.id,
       userId: user.id,
       email: user.email,
-      verificationTokenSimulated: rawToken,
+      accessToken,
+      refreshToken: rawRefreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        tenantId: tenant.id,
+        tenantName: tenant.razonSocial,
+        rnc: tenant.rnc,
+        direccion: tenant.direccion,
+        nombreComercial: tenant.nombreComercial,
+        plan: plan.name,
+        subscriptionStatus: 'ACTIVE',
+      },
     };
   }
 
@@ -203,7 +304,7 @@ export class AuthService {
       },
     });
 
-    // 3. Generar Access Token (15 min) y Refresh Token (7 días)
+    // 3. Generar Access Token (7 días para uso continuo sin cortes) y Refresh Token (7 días)
     const accessToken = this.jwtService.sign(
       {
         sub: user.id,
@@ -213,7 +314,7 @@ export class AuthService {
         rnc: user.tenant.rnc,
         environment: user.tenant.environment,
       },
-      { expiresIn: '15m' }
+      { expiresIn: '7d' }
     );
 
     const rawRefreshToken = crypto.randomBytes(40).toString('hex');
@@ -242,8 +343,11 @@ export class AuthService {
         role: user.role,
         tenantId: user.tenantId,
         tenantName: user.tenant.razonSocial,
+        nombreComercial: user.tenant.nombreComercial,
+        direccion: user.tenant.direccion,
+        telefono: user.tenant.telefono,
         rnc: user.tenant.rnc,
-        plan: user.tenant.subscription?.plan?.name || 'BÁSICO',
+        plan: user.tenant.subscription?.plan?.name || 'Plan Medio',
         subscriptionStatus: user.tenant.subscription?.status || 'ACTIVE',
       },
     };
@@ -455,5 +559,72 @@ export class AuthService {
         subscription: user.tenant.subscription,
       },
     };
+  }
+
+  /**
+   * Crear o invitar un colaborador real en Supabase PostgreSQL para el tenant actual
+   */
+  async createTeamUser(
+    tenantId: string,
+    dto: { fullName: string; email: string; password?: string; role?: string }
+  ): Promise<any> {
+    const cleanEmail = dto.email.toLowerCase().trim();
+    const existing = await prisma.tenantUser.findFirst({ where: { email: cleanEmail } });
+    if (existing) {
+      throw new BadRequestException(`El correo ${cleanEmail} ya pertenece a un usuario registrado.`);
+    }
+
+    const rawPassword = dto.password && dto.password.length >= 8 ? dto.password : crypto.randomBytes(12).toString('hex');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(rawPassword, salt);
+
+    const roleUpper = (dto.role || 'BILLER').toUpperCase();
+    let userRole: UserRole = UserRole.BILLER;
+    if (roleUpper === 'ADMIN') userRole = UserRole.ADMIN;
+    else if (roleUpper === 'ACCOUNTANT') userRole = UserRole.ACCOUNTANT;
+
+    const created = await prisma.tenantUser.create({
+      data: {
+        tenantId,
+        email: cleanEmail,
+        fullName: dto.fullName.trim(),
+        passwordHash,
+        role: userRole,
+        isActive: true,
+        emailVerified: true,
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    return {
+      success: true,
+      user: created,
+    };
+  }
+
+  /**
+   * Revocar acceso a un colaborador del tenant
+   */
+  async deleteTeamUser(tenantId: string, targetUserId: string, requestingUserId: string): Promise<any> {
+    if (targetUserId === requestingUserId) {
+      throw new BadRequestException('No puedes revocar tu propia cuenta de usuario.');
+    }
+
+    const target = await prisma.tenantUser.findFirst({
+      where: { id: targetUserId, tenantId },
+    });
+    if (!target) {
+      throw new NotFoundException('Usuario no encontrado en esta empresa.');
+    }
+
+    await prisma.tenantUser.delete({ where: { id: target.id } });
+    return { success: true, message: 'Acceso revocado correctamente.' };
   }
 }

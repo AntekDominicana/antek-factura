@@ -2,6 +2,8 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
+  Param,
   Body,
   Req,
   Res,
@@ -17,6 +19,7 @@ import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ChangePasswordDto, CreateTeamUserDto } from './dto/team-user.dto';
 
 // Limitador de intentos en memoria por IP/Usuario (Anti-Fuerza Bruta)
 const loginAttemptTracker = new Map<string, { count: number; firstAttempt: number }>();
@@ -81,8 +84,37 @@ export class AuthController {
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Registro de nuevo contribuyente y usuario administrador con validación estricta' })
-  async register(@Body() body: RegisterDto) {
-    return this.authService.register(body);
+  async register(
+    @Body() body: RegisterDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    const userAgent = req.headers['user-agent'];
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    const result = await this.authService.register(body, { userAgent, ipAddress });
+
+    const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
+    const sameSitePolicy = cookieDomain ? ('none' as const) : ('lax' as const);
+
+    res.cookie('access_token', result.accessToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: sameSitePolicy,
+      domain: cookieDomain,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    res.cookie('refresh_token', result.refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: sameSitePolicy,
+      domain: cookieDomain,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
+    return result;
   }
 
   @Post('login')
@@ -215,7 +247,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Cambio de contraseña seguro' })
   async changePassword(
     @Req() req: Request,
-    @Body() body: { currentPassword: string; newPassword: string }
+    @Body() body: ChangePasswordDto
   ) {
     const user = this.extractUserFromToken(req);
     return this.authService.changePassword(user.sub, body);
@@ -242,5 +274,24 @@ export class AuthController {
     const user = this.extractUserFromToken(req);
     const users = await this.authService.getUsers(user.tenantId);
     return { users };
+  }
+
+  @Post('users')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear nuevo colaborador o cajero para la empresa autenticada' })
+  async createUser(
+    @Req() req: Request,
+    @Body() body: CreateTeamUserDto
+  ): Promise<any> {
+    const user = this.extractUserFromToken(req);
+    return this.authService.createTeamUser(user.tenantId, body);
+  }
+
+  @Delete('users/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revocar acceso a colaborador del equipo' })
+  async deleteUser(@Req() req: Request, @Param('id') id: string): Promise<any> {
+    const user = this.extractUserFromToken(req);
+    return this.authService.deleteTeamUser(user.tenantId, id, user.sub || user.userId);
   }
 }

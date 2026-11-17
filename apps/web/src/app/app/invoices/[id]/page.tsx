@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
-import { API_BASE_URL, apiFetch, formatDOP, ECF_TYPE_LABELS } from '../../../../lib/api';
+import { API_BASE_URL, apiFetch, apiDownload, formatDOP, ECF_TYPE_LABELS } from '../../../../lib/api';
 import {
   ArrowLeft,
   Receipt,
@@ -22,51 +22,54 @@ export default function InvoiceDetailPage() {
   const id = String(params?.id || '');
   const [invoice, setInvoice] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [xmlData, setXmlData] = useState<string | null>(null);
   const [xmlModal, setXmlModal] = useState(false);
 
   useEffect(() => {
     async function loadDetail() {
+      setError(null);
       try {
         const inv = await apiFetch(`/v1/invoices/${id}`);
         setInvoice(inv);
-      } catch {
-        // Fallback demo si no existe
-        setInvoice({
-          id,
-          encf: id.startsWith('E') ? id : 'E310000000001',
-          tipoEcf: 31,
-          rncEmisor: '101532483',
-          razonSocialEmisor: 'ANTEK DOMINICANA SRL',
-          rncComprador: '132507908',
-          razonSocialComprador: 'CLIENTE EJEMPLO SRL',
-          montoTotal: 17700.0,
-          totalItbis: 2700.0,
-          fechaEmision: '16-11-2026',
-          codigoSeguridad: 'A8B9C2',
-          urlQr: `https://ecf.dgii.gov.do/testecf/consultatimbre?rncemisor=101532483&encf=E310000000001&montototal=17700`,
-          status: 'ACEPTADO',
-        });
+      } catch (err: any) {
+        setInvoice(null);
+        setError(err?.message || 'No se encontró este comprobante fiscal electrónico.');
       } finally {
         setLoading(false);
       }
     }
-    loadDetail();
+    if (id) loadDetail();
   }, [id]);
 
   const handleFetchXml = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/v1/invoices/${id}/xml`);
-      const txt = await res.text();
-      setXmlData(txt);
+      const txt = await apiFetch<string>(`/v1/invoices/${id}/xml`);
+      setXmlData(typeof txt === 'string' ? txt : JSON.stringify(txt, null, 2));
       setXmlModal(true);
-    } catch {
-      alert('No se pudo descargar el XML');
+    } catch (err: any) {
+      alert(err?.message || 'No se pudo descargar el XML');
     }
   };
 
   if (loading) {
     return <div className="p-8 text-center text-xs text-slate-500">Cargando comprobante...</div>;
+  }
+
+  if (error || !invoice) {
+    return (
+      <div className="max-w-xl mx-auto p-6 bg-white rounded-2xl border border-slate-200 text-center space-y-3">
+        <Receipt className="w-8 h-8 text-slate-400 mx-auto" />
+        <h2 className="text-base font-bold text-slate-900">Comprobante no disponible</h2>
+        <p className="text-xs text-slate-500">{error || 'El e-CF solicitado no existe o no pertenece a tu empresa.'}</p>
+        <Link
+          href="/app/invoices"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition"
+        >
+          <ArrowLeft className="w-4 h-4" /> Volver al Listado
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -88,15 +91,18 @@ export default function InvoiceDetailPage() {
             <Code2 className="w-4 h-4 text-emerald-600" />
             <span>Ver XML Firmado</span>
           </button>
-          <a
-            href={`${API_BASE_URL}/v1/invoices/${id}/pdf`}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={() =>
+              apiDownload(`/v1/invoices/${id}/pdf`, `${invoice.encf || id}.pdf`).catch((err) =>
+                alert(err?.message || 'No se pudo descargar el PDF')
+              )
+            }
             className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition"
           >
             <Printer className="w-4 h-4" />
             <span>Imprimir PDF</span>
-          </a>
+          </button>
         </div>
       </div>
 
@@ -137,7 +143,7 @@ export default function InvoiceDetailPage() {
               Código de Seguridad: <strong className="font-mono text-slate-900">{invoice.codigoSeguridad || 'N/A'}</strong>
             </p>
             <p>
-              Fecha de Emisión: <strong className="font-mono text-slate-900">{invoice.fechaEmision || '16-11-2026'}</strong>
+              Fecha de Emisión: <strong className="font-mono text-slate-900">{invoice.fechaEmision || '—'}</strong>
             </p>
             <p className="text-[11px] text-slate-400 break-all">
               URL Consulta Timbre: <a href={invoice.urlQr} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">{invoice.urlQr}</a>

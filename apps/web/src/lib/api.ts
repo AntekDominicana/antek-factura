@@ -1,16 +1,30 @@
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')
-    ? 'https://antek-factura-api.onrender.com'
-    : 'https://antek-factura-api.onrender.com');
+  process.env.NEXT_PUBLIC_API_URL || 'https://antek-factura-api.onrender.com';
+
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('antek_token');
+  } catch {
+    return null;
+  }
+}
 
 export async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+
+  if (token && !headers['Authorization'] && !headers['authorization']) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
+    credentials: 'include',
+    headers,
   });
 
   const contentType = res.headers.get('content-type') || '';
@@ -26,6 +40,43 @@ export async function apiFetch<T = any>(path: string, options?: RequestInit): Pr
   }
 
   return data as T;
+}
+
+export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers,
+  });
+
+  if (!res.ok) {
+    let msg = `Error descargando archivo (${res.status})`;
+    try {
+      const errData = await res.json();
+      if (errData?.message) msg = errData.message;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const filename = match?.[1] || fallbackFilename;
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export const ECF_TYPE_LABELS: Record<number, string> = {

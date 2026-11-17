@@ -55,7 +55,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tenant, setTenant] = useState<TenantData | null>(defaultTenant);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const hydrateFromLocalUser = () => {
+    if (typeof window === 'undefined') return null;
+    const cached = localStorage.getItem('antek_tenant_cache');
+    if (cached) {
+      try {
+        return JSON.parse(cached) as TenantData;
+      } catch {}
+    }
+    const rawUser = localStorage.getItem('antek_user');
+    if (rawUser) {
+      try {
+        const u = JSON.parse(rawUser);
+        if (u?.rnc || u?.tenantName) {
+          return {
+            ...defaultTenant,
+            id: u.tenantId,
+            rnc: u.rnc || '',
+            razonSocial: u.tenantName || '',
+            isConfigured: Boolean(u.rnc),
+            subscriptionPlan: u.plan || 'pro',
+          } as TenantData;
+        }
+      } catch {}
+    }
+    return null;
+  };
+
   const refreshTenant = async () => {
+    const localFallback = hydrateFromLocalUser();
+    if (localFallback) {
+      setTenant((prev) => ({ ...(prev || defaultTenant), ...localFallback }));
+    }
+
     try {
       const data = await apiFetch('/v1/dgii/config');
       if (data?.tenant) {
@@ -65,13 +97,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch {
-      if (typeof window !== 'undefined') {
-        const cached = localStorage.getItem('antek_tenant_cache');
-        if (cached) {
-          try {
-            setTenant(JSON.parse(cached));
-          } catch {}
-        }
+      if (localFallback) {
+        setTenant(localFallback);
       }
     } finally {
       setLoading(false);
@@ -85,11 +112,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('antek_tenant_cache', JSON.stringify(next));
     }
     try {
-      await apiFetch('/v1/dgii/config', {
+      const res = await apiFetch('/v1/tenant/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
       });
+      if (res?.tenant) {
+        setTenant(res.tenant);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('antek_tenant_cache', JSON.stringify(res.tenant));
+        }
+      }
     } catch (err) {
       console.warn('Config updated locally, backend sync failed', err);
     }

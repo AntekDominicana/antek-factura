@@ -34,12 +34,13 @@ export default function DashboardPage() {
       try {
         const [invData, purData, subRes] = await Promise.all([
           apiFetch<any[]>('/v1/invoices').catch(() => []),
-          apiFetch<any[]>('/v1/dgii/purchases').catch(() => []),
+          apiFetch<any>('/v1/purchases').catch(() => ({ purchases: [] })),
           apiFetch<any>('/v1/billing/subscription').catch(() => null),
         ]);
 
         if (Array.isArray(invData)) setInvoices(invData);
-        if (Array.isArray(purData)) setPurchases(purData);
+        if (Array.isArray(purData?.purchases)) setPurchases(purData.purchases);
+        else if (Array.isArray(purData)) setPurchases(purData);
         if (subRes) setSubData(subRes);
       } catch (err) {
         console.warn('Error loading dashboard', err);

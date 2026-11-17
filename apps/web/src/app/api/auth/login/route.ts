@@ -12,7 +12,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://antek-factura-api.onrender.com';
     const apiRes = await fetch(`${apiUrl}/v1/auth/login`, {
       method: 'POST',
       headers: {

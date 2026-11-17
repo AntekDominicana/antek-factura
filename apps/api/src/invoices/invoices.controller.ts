@@ -80,8 +80,9 @@ export class InvoicesController {
     @Query('async') isAsync?: string,
     @Query('simulateError') simulateError?: string
   ) {
-    const tenantId = req.user?.tenantId || req.tenantId || 'tenant-principal';
+    const tenantId = req.user?.tenantId || req.tenantId;
     const result = await this.fiscalService.emitInvoice(payload, {
+      tenantId,
       apiKey,
       idempotencyKey,
       isAsync: isAsync === 'true',
@@ -95,32 +96,37 @@ export class InvoicesController {
   }
 
   @Get('invoices')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Listar comprobantes electrónicos emitidos' })
   @ApiQuery({ name: 'tipoEcf', required: false, type: Number })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'environment', required: false, type: String })
   getInvoices(
+    @Req() req: any,
     @Query('tipoEcf') tipoEcf?: string,
     @Query('status') status?: string,
     @Query('environment') environment?: string
   ) {
-    return this.fiscalService.getInvoices({
-      tipoEcf: tipoEcf ? Number(tipoEcf) : undefined,
-      status,
-      environment,
-    });
+    return this.fiscalService.getInvoices(
+      {
+        tipoEcf: tipoEcf ? Number(tipoEcf) : undefined,
+        status,
+        environment,
+      },
+      req.user?.tenantId || req.tenantId
+    );
   }
 
   @Get('invoices/:id')
   @ApiOperation({ summary: 'Obtener detalle de un comprobante por ID o e-NCF' })
-  getInvoiceById(@Param('id') id: string) {
-    return this.fiscalService.getInvoiceById(id);
+  getInvoiceById(@Param('id') id: string, @Req() req: any): Promise<any> {
+    return this.fiscalService.getInvoiceById(id, req.user?.tenantId);
   }
 
   @Get('invoices/:id/status')
   @ApiOperation({ summary: 'Consultar estado en vivo ante la DGII' })
-  async checkInvoiceStatus(@Param('id') id: string) {
-    return this.fiscalService.checkInvoiceStatus(id);
+  async checkInvoiceStatus(@Param('id') id: string, @Req() req: any): Promise<any> {
+    return this.fiscalService.checkInvoiceStatus(id, req.user?.tenantId);
   }
 
   @Get('invoices/:id/pdf')
@@ -129,10 +135,11 @@ export class InvoicesController {
   async downloadPdf(
     @Param('id') id: string,
     @Query('template') template: string,
-    @Res() res: Response
+    @Res() res: Response,
+    @Req() req: any
   ) {
     const templateNum = template ? Number(template) : 1;
-    const buffer = await this.fiscalService.getInvoicePdf(id, templateNum);
+    const buffer = await this.fiscalService.getInvoicePdf(id, templateNum, req.user?.tenantId);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${id}-t${templateNum}.pdf"`,
@@ -143,8 +150,8 @@ export class InvoicesController {
 
   @Get('invoices/:id/xml')
   @ApiOperation({ summary: 'Descargar XML firmado inmutable (retención legal 5 años)' })
-  downloadXml(@Param('id') id: string, @Res() res: Response) {
-    const { encf, xml, sha256 } = this.fiscalService.getInvoiceXml(id);
+  async downloadXml(@Param('id') id: string, @Res() res: Response, @Req() req: any) {
+    const { encf, xml, sha256 } = await this.fiscalService.getInvoiceXml(id, req.user?.tenantId);
     res.set({
       'Content-Type': 'application/xml; charset=utf-8',
       'Content-Disposition': `attachment; filename="${encf}.xml"`,
@@ -154,27 +161,33 @@ export class InvoicesController {
   }
 
   @Get('invoices/:id/share-whatsapp')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Generar enlace público firmado (72h) y URL directa de WhatsApp' })
-  async getWhatsAppShareUrl(@Param('id') id: string) {
-    const invoice = this.fiscalService.getInvoiceById(id);
+  async getWhatsAppShareUrl(@Param('id') id: string, @Req() req: any) {
+    const invoice = await this.fiscalService.getInvoiceById(id, req.user?.tenantId);
     return this.notificationsService.generateWhatsAppShareUrl({
       id: invoice.id,
       encf: invoice.encf,
-      rncEmisor: '131880738',
+      rncEmisor: (invoice as any).rncEmisor || '131880738',
       montoTotal: invoice.totales?.montoTotal || 0,
     });
   }
 
   @Get('sequences')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Listar secuencias autorizadas e-NCF con alertas de agotamiento y vencimiento' })
-  getSequences() {
-    return this.fiscalService.getSequences();
+  getSequences(@Req() req: any) {
+    return this.fiscalService.getSequences(req.user?.tenantId || req.tenantId);
   }
 
   @Post('sequences')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Registrar y sincronizar rango de secuencias e-NCF autorizado por DGII' })
-  registerSequence(@Body() body: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION' }) {
-    return this.fiscalService.registerSequence(body);
+  registerSequence(
+    @Body() body: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION' },
+    @Req() req: any
+  ) {
+    return this.fiscalService.registerSequence(body, req.user?.tenantId || req.tenantId);
   }
 
   @Get('catalogs/:type')
@@ -187,15 +200,31 @@ export class InvoicesController {
   }
 
   @Get('dashboard')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Resumen integral del Dashboard SaaS multi-tenant' })
-  getDashboard() {
-    return this.fiscalService.getDashboardSummary();
+  getDashboard(@Req() req: any) {
+    return this.fiscalService.getDashboardSummary(req.user?.tenantId || req.tenantId);
   }
 
   @Post('tenant/settings')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Actualizar configuración del tenant, proveedor fiscal, contingencia y credenciales cifradas' })
-  updateTenantSettings(@Body() body: any) {
-    return this.fiscalService.updateTenantSettings(body);
+  updateTenantSettings(@Body() body: any, @Req() req: any) {
+    return this.fiscalService.updateTenantSettings(body, req.user?.tenantId || req.tenantId);
+  }
+
+  @Get('dgii/config')
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Obtener configuración fiscal y datos del Tenant autenticado' })
+  getDgiiConfig(@Req() req: any) {
+    return this.fiscalService.getDgiiConfig(req.user?.tenantId || req.tenantId);
+  }
+
+  @Get('dgii/purchases')
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Obtener compras registradas para el Libro Contable 606' })
+  getDgiiPurchases(@Req() req: any) {
+    return this.fiscalService.getDgiiPurchases(req.user?.tenantId || req.tenantId);
   }
 
   @Post('tenant/contingency/reconcile')
@@ -235,19 +264,25 @@ export class InvoicesController {
   }
 
   @Get('dgii/reports/:period')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Generar reportes oficiales DGII (Formatos 606, 607, 608 y Pre-Declaración IT-1)' })
-  getDgiiReports(@Param('period') period: string) {
-    return this.fiscalService.generateDgiiReports(period);
+  getDgiiReports(@Param('period') period: string, @Req() req: any) {
+    return this.fiscalService.generateDgiiReports(period, req.user?.tenantId || req.tenantId);
   }
 
   @Get('dgii/reports/:period/download/:format')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Descargar archivo TXT oficial DGII (606, 607, 608 o 609) para Oficina Virtual' })
-  downloadDgiiReportTxt(
+  async downloadDgiiReportTxt(
     @Param('period') period: string,
     @Param('format') format: string,
-    @Res() res: Response
+    @Res() res: Response,
+    @Req() req: any
   ) {
-    const reports = this.fiscalService.generateDgiiReports(period);
+    const reports = await this.fiscalService.generateDgiiReports(
+      period,
+      req.user?.tenantId || req.tenantId
+    );
     const fmt = format.toUpperCase();
     const content =
       fmt === '606'
@@ -266,14 +301,19 @@ export class InvoicesController {
   }
 
   @Get('dgii/reports/:period/excel')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({
     summary: 'Descargar Libro Contable Digital en Excel (.xls multi-hoja: Compras 606, Ventas 607 y Resumen IT-1)',
   })
-  downloadAccountantExcel(
+  async downloadAccountantExcel(
     @Param('period') period: string,
-    @Res() res: Response
+    @Res() res: Response,
+    @Req() req: any
   ) {
-    const excel = this.fiscalService.generateAccountantExcelReport(period);
+    const excel = await this.fiscalService.generateAccountantExcelReport(
+      period,
+      req.user?.tenantId || req.tenantId
+    );
     res.set({
       'Content-Type': 'application/vnd.ms-excel; charset=utf-8',
       'Content-Disposition': `attachment; filename="${excel.filename}"`,

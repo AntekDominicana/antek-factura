@@ -38,23 +38,57 @@ function RegisterForm() {
     setLoading(true);
 
     try {
-      await new Promise((r) => setTimeout(r, 700));
-      // Guardar datos preliminares en localStorage para el onboarding
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          email: form.email.trim(),
+          rnc: form.rnc.replace(/\D/g, ''),
+          razonSocial: form.razonSocial.trim(),
+          password: form.password,
+          plan: form.plan,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'No se pudo completar el registro en la plataforma.');
+      }
+
       if (typeof window !== 'undefined') {
+        if (data.user) {
+          localStorage.setItem('antek_user', JSON.stringify(data.user));
+          localStorage.setItem(
+            'antek_tenant_cache',
+            JSON.stringify({
+              id: data.user.tenantId,
+              rnc: data.user.rnc,
+              razonSocial: data.user.tenantName,
+              direccion: data.user.direccion,
+              isConfigured: true,
+              subscriptionPlan: form.plan,
+              subscriptionStatus: 'ACTIVE',
+            })
+          );
+        }
+        if (data.accessToken) {
+          localStorage.setItem('antek_token', data.accessToken);
+        }
         localStorage.setItem(
           'antek_pending_onboarding',
           JSON.stringify({
-            rnc: form.rnc,
-            razonSocial: form.razonSocial,
-            email: form.email,
+            rnc: form.rnc.replace(/\D/g, ''),
+            razonSocial: form.razonSocial.trim(),
+            email: form.email.trim(),
             plan: form.plan,
           })
         );
       }
-      // Ir al asistente de onboarding
+
       router.push('/onboarding');
-    } catch {
-      setError('No se pudo completar el registro. Intenta nuevamente.');
+    } catch (err: any) {
+      setError(err?.message || 'No se pudo completar el registro. Verifica tus datos e intenta nuevamente.');
     } finally {
       setLoading(false);
     }

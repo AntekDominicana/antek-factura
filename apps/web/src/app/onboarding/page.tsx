@@ -4,15 +4,11 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
+import { apiFetch } from '../../lib/api';
 import {
-  Building2,
-  KeyRound,
   Upload,
-  CheckCircle2,
   ArrowRight,
-  ShieldCheck,
-  CreditCard,
-  Sparkles,
+  CheckCircle2,
 } from 'lucide-react';
 
 export default function OnboardingPage() {
@@ -22,40 +18,113 @@ export default function OnboardingPage() {
 
   const [form, setForm] = useState({
     rnc: '',
-    razonSocial: 'Juan Pérez SRL',
+    razonSocial: '',
     nombreComercial: '',
-    direccion: 'Av. Winston Churchill #109, Santo Domingo',
-    telefono: '(809) 555-0199',
+    direccion: '',
+    telefono: '',
     provider: 'DGII_DIRECT',
     logoBase64: '',
-    plan: 'business-pro',
+    plan: 'MEDIUM',
   });
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const pending = localStorage.getItem('antek_pending_onboarding');
+      const storedUser = localStorage.getItem('antek_user');
+      let parsedUser: any = null;
+      if (storedUser) {
+        try {
+          parsedUser = JSON.parse(storedUser);
+        } catch {}
+      }
+
       if (pending) {
         try {
           const parsed = JSON.parse(pending);
           setForm((prev) => ({
             ...prev,
-            rnc: parsed.rnc || prev.rnc,
-            razonSocial: parsed.razonSocial || prev.razonSocial,
+            rnc: parsed.rnc || parsedUser?.rnc || prev.rnc,
+            razonSocial: parsed.razonSocial || parsedUser?.tenantName || prev.razonSocial,
             plan: parsed.plan || prev.plan,
           }));
         } catch {}
+      } else if (parsedUser) {
+        setForm((prev) => ({
+          ...prev,
+          rnc: parsedUser.rnc || '',
+          razonSocial: parsedUser.tenantName || '',
+          direccion: parsedUser.direccion || '',
+          telefono: parsedUser.telefono || '',
+          plan: parsedUser.plan || 'MEDIUM',
+        }));
       }
     }
   }, []);
 
+  const handleLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 600;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/png');
+          setForm((prev) => ({ ...prev, logoBase64: dataUrl }));
+        }
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleFinish = async () => {
     setLoading(true);
-    // Guardar en localStorage / API
+    try {
+      await apiFetch('/v1/tenant/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          rnc: form.rnc.trim(),
+          razonSocial: form.razonSocial.trim(),
+          nombreComercial: form.nombreComercial.trim() || form.razonSocial.trim(),
+          direccion: form.direccion.trim() || 'República Dominicana',
+          telefono: form.telefono.trim(),
+          fiscalProvider: form.provider,
+          logoBase64: form.logoBase64 || undefined,
+        }),
+      });
+    } catch {
+      // Continuar al panel aunque falte algún ajuste opcional
+    }
+
     if (typeof window !== 'undefined') {
       localStorage.setItem('antek_tenant_cache', JSON.stringify({ ...form, isConfigured: true }));
+      localStorage.removeItem('antek_pending_onboarding');
     }
-    await new Promise((r) => setTimeout(r, 800));
+
     router.push('/app/dashboard');
+  };
+
+  const planDisplay: Record<string, string> = {
+    BASIC: 'Plan Básico (RD$ 990/mes · 100 e-CF)',
+    MEDIUM: 'Plan Medio (RD$ 2,450/mes · 600 e-CF)',
+    PRO: 'Plan Pro (RD$ 4,900/mes · 3,000 e-CF)',
   };
 
   return (
@@ -85,18 +154,18 @@ export default function OnboardingPage() {
               <div className="space-y-1">
                 <h2 className="text-xl font-bold text-white">1. Datos Fiscales de Tu Negocio</h2>
                 <p className="text-xs text-slate-400">
-                  Ingresa tu RNC y nombre legal registrado ante la DGII
+                  Verifica tu RNC y nombre legal registrado ante la DGII
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">RNC Empresa</label>
+                  <label className="block text-slate-300 font-semibold mb-1">RNC o Cédula Empresa</label>
                   <input
                     type="text"
                     value={form.rnc}
                     onChange={(e) => setForm({ ...form, rnc: e.target.value })}
-                    placeholder="101532483"
+                    placeholder="9 u 11 dígitos numéricos"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
                   />
                 </div>
@@ -106,7 +175,7 @@ export default function OnboardingPage() {
                     type="text"
                     value={form.razonSocial}
                     onChange={(e) => setForm({ ...form, razonSocial: e.target.value })}
-                    placeholder="Juan Pérez SRL"
+                    placeholder="Nombre legal de tu empresa"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
@@ -116,7 +185,7 @@ export default function OnboardingPage() {
                     type="text"
                     value={form.direccion}
                     onChange={(e) => setForm({ ...form, direccion: e.target.value })}
-                    placeholder="Av. Principal #100, Santo Domingo"
+                    placeholder="Dirección física del domicilio fiscal"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
@@ -197,26 +266,33 @@ export default function OnboardingPage() {
           {step === 3 && (
             <div className="space-y-4">
               <div className="space-y-1">
-                <h2 className="text-xl font-bold text-white">3. Logo de Tu Negocio (Estilo Alegra)</h2>
+                <h2 className="text-xl font-bold text-white">3. Logo de Tu Negocio</h2>
                 <p className="text-xs text-slate-400">
-                  Tu logo aparecerá como marca principal en tus facturas, con el sello oficial de ANTEK Factura
+                  Tu logo aparecerá como marca principal en tus facturas y tirillas de 80mm
                 </p>
               </div>
 
               <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center space-y-3">
-                <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center mx-auto text-sky-400">
-                  <Upload className="w-8 h-8" />
-                </div>
+                {form.logoBase64 ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <img src={form.logoBase64} alt="Logo" className="h-20 object-contain bg-white rounded-xl p-2" />
+                    <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Logo cargado correctamente
+                    </span>
+                  </div>
+                ) : (
+                  <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-700 flex items-center justify-center mx-auto text-sky-400">
+                    <Upload className="w-8 h-8" />
+                  </div>
+                )}
                 <h4 className="text-sm font-bold text-white">Sube el Logo de Tu Negocio</h4>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  El sistema comprime automáticamente cualquier tamaño de foto de tu celular o computadora para que nunca pese de más.
+                  El sistema comprime automáticamente cualquier tamaño de imagen (PNG/JPG). También puedes hacerlo más tarde en Configuración.
                 </p>
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-xl bg-sky-500/20 text-sky-300 font-bold text-xs border border-sky-500/30 hover:bg-sky-500/30"
-                >
+                <label className="inline-block px-4 py-2 rounded-xl bg-sky-500/20 text-sky-300 font-bold text-xs border border-sky-500/30 hover:bg-sky-500/30 cursor-pointer">
                   Seleccionar Imagen (PNG/JPG)
-                </button>
+                  <input type="file" accept="image/*" className="hidden" onChange={handleLogoSelect} />
+                </label>
               </div>
 
               <div className="pt-4 flex justify-between">
@@ -244,17 +320,19 @@ export default function OnboardingPage() {
               <div className="space-y-1 text-center">
                 <h2 className="text-xl font-bold text-white">¡Todo Listo para Facturar!</h2>
                 <p className="text-xs text-slate-400">
-                  Tu cuenta ha sido creada bajo el plan seleccionado con 5 días de gracia garantizados
+                  Tu cuenta fue registrada en Supabase con 5 días de gracia garantizados
                 </p>
               </div>
 
               <div className="p-4 rounded-2xl bg-sky-500/10 border border-sky-500/30 text-xs space-y-2">
                 <div className="flex justify-between items-center text-white font-bold">
                   <span>Plan Seleccionado:</span>
-                  <span className="text-sky-300 font-black">Plan Negocio Pro (RD$ 2,450/mes)</span>
+                  <span className="text-sky-300 font-black">
+                    {planDisplay[form.plan.toUpperCase()] || form.plan}
+                  </span>
                 </div>
                 <p className="text-[11px] text-slate-300">
-                  Podrás activar tu Link de Pago en cualquier momento desde <strong className="text-white">Ajustes → Facturación</strong>. Tienes 5 días de gracia para emitir tus primeros comprobantes sin interrupción.
+                  Podrás gestionar tus pagos desde <strong className="text-white">Ajustes → Planes &amp; Link Pago</strong>. Ya tienes secuencias e-NCF habilitadas para comenzar.
                 </p>
               </div>
 
@@ -272,7 +350,7 @@ export default function OnboardingPage() {
                   onClick={handleFinish}
                   className="px-6 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-500/25 flex items-center gap-2 transition"
                 >
-                  <span>{loading ? 'Accediendo a la app...' : 'Ir al Panel de Facturación →'}</span>
+                  <span>{loading ? 'Guardando configuración...' : 'Ir al Panel de Facturación →'}</span>
                 </button>
               </div>
             </div>

@@ -20,11 +20,11 @@ export class RegisterDto {
   @MaxLength(255)
   nombreComercial?: string;
 
-  @ApiProperty({ description: 'Dirección física del domicilio fiscal' })
-  @IsNotEmpty({ message: 'La dirección es obligatoria.' })
+  @ApiPropertyOptional({ description: 'Dirección física del domicilio fiscal' })
+  @IsOptional()
   @IsString()
   @MaxLength(255)
-  direccion!: string;
+  direccion?: string;
 
   @ApiProperty({ description: 'Correo electrónico corporativo del administrador', example: 'admin@empresa.com.do' })
   @IsNotEmpty({ message: 'El correo electrónico es obligatorio.' })

@@ -162,20 +162,6 @@ export default function BillingSettingsPage() {
     }
   };
 
-  const handleSimulateStatus = async (status: 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED', graceDays = 3) => {
-    try {
-      await apiFetch<any>('/v1/billing/simulate-status', {
-        method: 'POST',
-        body: JSON.stringify({ status, graceDaysRemaining: graceDays }),
-      });
-      setActionSuccessMsg(`Estado de suscripción cambiado a ${status} para pruebas.`);
-      setTimeout(() => setActionSuccessMsg(null), 3500);
-      await loadBillingData();
-    } catch (err: any) {
-      alert(err.message || 'Error simulando estado.');
-    }
-  };
-
   const currentUsage = sub?.invoicesUsedCurrentPeriod || 0;
   const currentLimit = sub?.monthlyInvoiceLimit || sub?.plan?.monthlyInvoiceLimit || 600;
   const usagePercentage = Math.min(100, Math.round((currentUsage / currentLimit) * 100));
@@ -191,38 +177,6 @@ export default function BillingSettingsPage() {
           <p className="text-xs text-slate-500">
             Monitorea el consumo de comprobantes e-CF, planes comerciales y regla de 5 días de gracia
           </p>
-        </div>
-
-        {/* Simulador de Estados (Sandbox Testing) */}
-        <div className="flex items-center gap-1.5 p-1 bg-white border border-slate-300 rounded-xl text-[11px] font-bold">
-          <span className="text-slate-400 px-2 uppercase tracking-wider text-[9px]">Simular:</span>
-          <button
-            type="button"
-            onClick={() => handleSimulateStatus('ACTIVE')}
-            className={`px-2 py-1 rounded-lg transition ${
-              sub?.status === 'ACTIVE' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Activo
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSimulateStatus('PAST_DUE', 3)}
-            className={`px-2 py-1 rounded-lg transition ${
-              isPastDue ? 'bg-amber-500 text-white' : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Gracia (3d)
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSimulateStatus('SUSPENDED')}
-            className={`px-2 py-1 rounded-lg transition ${
-              isSuspended ? 'bg-rose-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            Suspendido
-          </button>
         </div>
       </div>
 

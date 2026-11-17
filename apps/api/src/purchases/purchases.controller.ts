@@ -5,16 +5,21 @@ import {
   Body,
   Param,
   Query,
-  Headers,
   Req,
   BadRequestException,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiHeader } from '@nestjs/swagger';
 import { Response } from 'express';
 import { PurchasesService } from './purchases.service';
 import { TenantAuthGuard } from '../common/guards/tenant-auth.guard';
+import {
+  CommercialApprovalDto,
+  ImportXmlPurchaseDto,
+  ParseQrDto,
+  RegisterQrPurchaseDto,
+} from './dto/purchase.dto';
 
 @ApiTags('Bandeja de Compras & QR e-CF (Gastos 606)')
 @Controller(['purchases', 'v1/purchases'])
@@ -23,23 +28,24 @@ export class PurchasesController {
   constructor(private readonly purchasesService: PurchasesService) {}
 
   private getEffectiveTenantId(req: any): string {
-    return req.user?.tenantId || req.tenantId || 'tenant_antek_default';
+    return req.user?.tenantId || req.tenantId;
   }
 
   @Post('parse-qr')
   @ApiOperation({ summary: 'Parsea y valida parámetros fiscales de un QR / URL de timbre DGII' })
-  parseQr(@Body() body: { qrRaw: string }) {
+  async parseQr(@Body() body: ParseQrDto, @Req() req: any) {
     if (!body?.qrRaw) {
       throw new BadRequestException('El campo qrRaw es requerido.');
     }
-    return this.purchasesService.parseDgiiQr(body.qrRaw);
+    const tenantId = this.getEffectiveTenantId(req);
+    return this.purchasesService.parseDgiiQr(body.qrRaw, tenantId);
   }
 
   @Post('register-qr')
-  @ApiOperation({ summary: 'Registra un gasto escaneando el código QR oficial de la factura e-CF' })
+  @ApiOperation({ summary: 'Registra un gasto escaneando el código QR o ingresándolo en el Libro Contable 606' })
   @ApiHeader({ name: 'X-API-Key', required: false })
   async registerQr(
-    @Body() body: { qrRaw: string; tipoGasto606?: string },
+    @Body() body: RegisterQrPurchaseDto,
     @Req() req: any
   ): Promise<any> {
     const tenantId = this.getEffectiveTenantId(req);
@@ -50,7 +56,7 @@ export class PurchasesController {
   @ApiOperation({ summary: 'Carga e importa un archivo XML de e-CF recibido de un proveedor' })
   @ApiHeader({ name: 'X-API-Key', required: false })
   async importXml(
-    @Body() body: { xmlContent: string; tipoGasto606?: string },
+    @Body() body: ImportXmlPurchaseDto,
     @Req() req: any
   ): Promise<any> {
     const tenantId = this.getEffectiveTenantId(req);
@@ -74,7 +80,7 @@ export class PurchasesController {
   @ApiHeader({ name: 'X-API-Key', required: false })
   async commercialApproval(
     @Param('id') id: string,
-    @Body() body: { status: 'APPROVED' | 'REJECTED'; comment?: string },
+    @Body() body: CommercialApprovalDto,
     @Req() req: any
   ): Promise<any> {
     const tenantId = this.getEffectiveTenantId(req);

@@ -40,9 +40,9 @@ export default function NewInvoicePage() {
 
   const [items, setItems] = useState<any[]>([
     {
-      nombreItem: 'Servicio de Consultoría de Software',
+      nombreItem: '',
       cantidadItem: 1,
-      precioUnitarioItem: 15000,
+      precioUnitarioItem: 0,
       indicadorFacturacion: 1, // 18%
     },
   ]);
@@ -54,7 +54,7 @@ export default function NewInvoicePage() {
   // Draft invoice for preview
   const draftInvoice = useMemo(() => {
     return {
-      rncEmisor: tenant?.rnc || '101532483',
+      rncEmisor: tenant?.rnc || '',
       razonSocialEmisor: tenant?.razonSocial || 'Tu Empresa',
       tipoEcf,
       encf: emittedResult?.encf || `E${tipoEcf}0000000001`,
@@ -119,8 +119,16 @@ export default function NewInvoicePage() {
 
   const handleEmit = async () => {
     setError(null);
-    if (tipoEcf === 31 && (!rncComprador || !razonSocialComprador)) {
+    if (tipoEcf === 31 && (!rncComprador.trim() || !razonSocialComprador.trim())) {
       setError('La Factura de Crédito Fiscal (e-CF 31) requiere RNC y Razón Social del receptor.');
+      return;
+    }
+
+    const validItems = items.filter(
+      (it) => String(it?.nombreItem || '').trim().length > 0 && Number(it?.precioUnitarioItem) > 0 && Number(it?.cantidadItem) > 0
+    );
+    if (validItems.length === 0) {
+      setError('Agrega al menos un producto o servicio con descripción, cantidad y precio mayor a 0.');
       return;
     }
 
@@ -128,12 +136,19 @@ export default function NewInvoicePage() {
     try {
       const payload = {
         tipoEcf,
+        comprador:
+          rncComprador.trim() || razonSocialComprador.trim()
+            ? {
+                rncComprador: rncComprador.trim() || undefined,
+                razonSocialComprador: razonSocialComprador.trim() || undefined,
+              }
+            : undefined,
         rncComprador: rncComprador.trim() || undefined,
         razonSocialComprador: razonSocialComprador.trim() || undefined,
         tipoPago,
         formaPago,
         fechaLimitePago: tipoPago === 2 ? fechaLimitePago : undefined,
-        items,
+        items: validItems,
       };
       const res = await apiFetch('/v1/invoices', {
         method: 'POST',

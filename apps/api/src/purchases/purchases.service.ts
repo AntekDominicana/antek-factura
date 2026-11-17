@@ -26,8 +26,8 @@ export class PurchasesService {
   /**
    * Parsea un URL o contenido de un código QR del Timbre e-CF emitido por DGII
    */
-  public parseDgiiQr(rawInput: string): DgiiQrParsedData {
-    let urlString = rawInput.trim();
+  public async parseDgiiQr(rawInput: string, tenantId?: string): Promise<DgiiQrParsedData> {
+    const urlString = rawInput.trim();
 
     let urlParams: URLSearchParams;
     try {
@@ -43,13 +43,13 @@ export class PurchasesService {
       throw new BadRequestException('Formato de código QR / URL de DGII inválido.');
     }
 
-    const rncEmisor = urlParams.get('RncEmisor') || urlParams.get('rncEmisor') || '';
-    const rncComprador = urlParams.get('RncComprador') || urlParams.get('rncComprador') || '';
+    const rncEmisor = urlParams.get('RncEmisor') || urlParams.get('rncEmisor') || urlParams.get('rncemisor') || '';
+    let rncComprador = urlParams.get('RncComprador') || urlParams.get('rncComprador') || urlParams.get('rnccomprador') || '';
     const encf = (urlParams.get('ENCF') || urlParams.get('eNCF') || urlParams.get('encf') || '').toUpperCase();
-    const montoTotalStr = urlParams.get('MontoTotal') || urlParams.get('montoTotal') || '0';
-    const totalItbisStr = urlParams.get('TotalITBIS') || urlParams.get('totalITBIS') || urlParams.get('totalItbis') || '0';
-    const fechaEmision = urlParams.get('FechaEmision') || urlParams.get('fechaEmision') || new Date().toISOString().split('T')[0];
-    const codigoSeguridad = urlParams.get('CodigoSeguridad') || urlParams.get('codigoSeguridad') || undefined;
+    const montoTotalStr = urlParams.get('MontoTotal') || urlParams.get('montoTotal') || urlParams.get('montototal') || '0';
+    const totalItbisStr = urlParams.get('TotalITBIS') || urlParams.get('totalITBIS') || urlParams.get('totalItbis') || urlParams.get('totalitbis') || '0';
+    const fechaEmision = urlParams.get('FechaEmision') || urlParams.get('fechaEmision') || urlParams.get('fechaemision') || new Date().toISOString().split('T')[0];
+    const codigoSeguridad = urlParams.get('CodigoSeguridad') || urlParams.get('codigoSeguridad') || urlParams.get('codigoseguridad') || undefined;
 
     if (!rncEmisor || !encf) {
       throw new BadRequestException('El QR escaneado no contiene los parámetros fiscales mínimos requeridos (RNC Emisor y e-NCF).');
@@ -63,16 +63,31 @@ export class PurchasesService {
       }
     }
 
-    let razonSocialEmisor = 'EMISOR FISCAL REGISTRADO';
+    let razonSocialEmisor = `RNC ${rncEmisor.replace(/\D/g, '')}`;
     try {
       const emisorData = this.rncService.lookup(rncEmisor);
-      razonSocialEmisor = emisorData.razonSocial;
-    } catch {
-      razonSocialEmisor = `RNC ${rncEmisor}`;
+      if (emisorData?.razonSocial) {
+        razonSocialEmisor = emisorData.razonSocial;
+      }
+    } catch {}
+
+    let razonSocialComprador: string | undefined = undefined;
+    if (tenantId) {
+      try {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { rnc: true, razonSocial: true },
+        });
+        if (tenant) {
+          if (!rncComprador) rncComprador = tenant.rnc;
+          if (rncComprador.replace(/\D/g, '') === tenant.rnc.replace(/\D/g, '')) {
+            razonSocialComprador = tenant.razonSocial;
+          }
+        }
+      } catch {}
     }
 
-    let razonSocialComprador = undefined;
-    if (rncComprador) {
+    if (rncComprador && !razonSocialComprador) {
       try {
         const compradorData = this.rncService.lookup(rncComprador);
         razonSocialComprador = compradorData.razonSocial;
@@ -97,16 +112,77 @@ export class PurchasesService {
   }
 
   /**
-   * Registra una factura de gasto escaneada desde QR en el Libro de Compras (606)
+   * Registra una factura de gasto escaneada desde QR o digitada en el Libro de Compras (606)
    */
   public async registerFromQr(
     tenantId: string,
     payload: {
-      qrRaw: string;
+      qrRaw?: string;
+      rncEmisor?: string;
+      razonSocialEmisor?: string;
+      encf?: string;
+      fechaEmision?: string;
+      montoTotal?: number;
+      totalItbis?: number;
       tipoGasto606?: string;
     }
   ): Promise<any> {
-    const parsed = this.parseDgiiQr(payload.qrRaw);
+    let parsed: DgiiQrParsedData;
+
+    if (payload.qrRaw && payload.qrRaw.trim()) {
+      parsed = await this.parseDgiiQr(payload.qrRaw, tenantId);
+      if (payload.rncEmisor) parsed.rncEmisor = payload.rncEmisor.replace(/\D/g, '');
+      if (payload.razonSocialEmisor?.trim()) parsed.razonSocialEmisor = payload.razonSocialEmisor.trim();
+      if (payload.encf?.trim()) parsed.encf = payload.encf.trim().toUpperCase();
+      if (payload.fechaEmision?.trim()) parsed.fechaEmision = payload.fechaEmision.trim();
+      if (payload.montoTotal !== undefined) parsed.montoTotal = Number(payload.montoTotal);
+      if (payload.totalItbis !== undefined) parsed.totalItbis = Number(payload.totalItbis);
+    } else {
+      const cleanRnc = (payload.rncEmisor || '').replace(/\D/g, '');
+      const cleanEncf = (payload.encf || '').trim().toUpperCase();
+      if (!cleanRnc || !cleanEncf) {
+        throw new BadRequestException('Debe proporcionar el código QR o el RNC del Emisor junto con el e-NCF.');
+      }
+
+      let resolvedName = payload.razonSocialEmisor?.trim() || '';
+      if (!resolvedName) {
+        try {
+          resolvedName = this.rncService.lookup(cleanRnc).razonSocial;
+        } catch {
+          resolvedName = `RNC ${cleanRnc}`;
+        }
+      }
+
+      let tipoEcf = 31;
+      if (cleanEncf.startsWith('E')) {
+        const t = parseInt(cleanEncf.substring(1, 3), 10);
+        if (!isNaN(t)) tipoEcf = t;
+      }
+
+      let rncComprador = '';
+      let razonSocialComprador: string | undefined;
+      try {
+        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { rnc: true, razonSocial: true } });
+        if (tenant) {
+          rncComprador = tenant.rnc;
+          razonSocialComprador = tenant.razonSocial;
+        }
+      } catch {}
+
+      parsed = {
+        rncEmisor: cleanRnc,
+        razonSocialEmisor: resolvedName,
+        rncComprador,
+        razonSocialComprador,
+        encf: cleanEncf,
+        tipoEcf,
+        fechaEmision: payload.fechaEmision?.trim() || new Date().toISOString().split('T')[0],
+        montoTotal: Number(payload.montoTotal || 0),
+        totalItbis: Number(payload.totalItbis || 0),
+        estadoDgii: 'Aceptado',
+      };
+    }
+
     const tipoGasto = payload.tipoGasto606 || '02';
 
     let purchase: any;
@@ -170,7 +246,7 @@ export class PurchasesService {
 
     return {
       success: true,
-      message: 'Comprobante de gasto registrado exitosamente en el Libro 606.',
+      message: 'Comprobante de gasto guardado exitosamente en el Libro Contable (606).',
       purchase,
       verifiedDgii: {
         rncEmisor: parsed.rncEmisor,
@@ -390,7 +466,11 @@ export class PurchasesService {
    */
   public async exportFormat606(tenantId: string, periodo: string) {
     const { purchases } = await this.getPurchases(tenantId);
-    const rnc = '131880738';
+    let rnc = '000000000';
+    try {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { rnc: true } });
+      if (tenant?.rnc) rnc = tenant.rnc;
+    } catch {}
 
     const lines: string[] = [];
     lines.push(`606|${rnc}|${periodo || new Date().toISOString().slice(0, 7).replace('-', '')}|${purchases.length}`);

@@ -14,7 +14,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { AntekLogo } from '../../../../components/AntekLogo';
-import { apiFetch } from '../../../../lib/api';
+import { API_BASE_URL, apiFetch } from '../../../../lib/api';
 
 export default function PublicInvoiceViewPage() {
   const params = useParams();
@@ -24,28 +24,22 @@ export default function PublicInvoiceViewPage() {
 
   const [invoice, setInvoice] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
+    setError(null);
     apiFetch<any>(`/v1/invoices/${id}/status`)
       .then((data) => {
         setInvoice(data);
       })
-      .catch(() => {
-        // Fallback datos mínimos de presentación
-        setInvoice({
-          id,
-          encf: encfParam || 'E310004048543',
-          rncEmisor: '131880738',
-          montoTotal: 641.8,
-          totalItbis: 97.9,
-          status: 'ACCEPTED',
-          createdAt: new Date().toISOString(),
-        });
+      .catch((err: any) => {
+        setInvoice(null);
+        setError(err?.message || 'No se encontró este comprobante fiscal electrónico.');
       })
       .finally(() => setLoading(false));
-  }, [id, encfParam]);
+  }, [id]);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col justify-between text-slate-800 selection:bg-sky-500 selection:text-white">
@@ -60,6 +54,18 @@ export default function PublicInvoiceViewPage() {
 
       {/* Card Principal de la Factura */}
       <main className="max-w-2xl w-full mx-auto p-4 sm:p-6 my-auto">
+        {loading ? (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl p-10 text-center text-sm text-slate-500">
+            Consultando comprobante fiscal en DGII...
+          </div>
+        ) : error || !invoice ? (
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl p-8 text-center space-y-2">
+            <h1 className="text-lg font-black text-slate-900">Comprobante no encontrado</h1>
+            <p className="text-xs text-slate-500">
+              {error || 'No fue posible localizar este comprobante fiscal electrónico.'}
+            </p>
+          </div>
+        ) : (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
           {/* Cabecera del Documento */}
           <div className="p-6 bg-gradient-to-br from-slate-900 to-slate-850 text-white border-b border-slate-800">
@@ -69,13 +75,13 @@ export default function PublicInvoiceViewPage() {
                   Factura de Crédito Fiscal Electrónica
                 </span>
                 <h1 className="text-2xl font-black font-mono tracking-tight text-white mt-0.5">
-                  {invoice?.encf || encfParam || 'E310004048543'}
+                  {invoice?.encf || encfParam || id}
                 </h1>
               </div>
 
               <div className="px-3 py-1.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-extrabold flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4" />
-                Aceptado por DGII
+                {invoice?.status || 'Aceptado por DGII'}
               </div>
             </div>
           </div>
@@ -88,14 +94,14 @@ export default function PublicInvoiceViewPage() {
                 <div className="font-bold text-slate-900 mt-1">
                   {invoice?.createdAt
                     ? new Date(invoice.createdAt).toLocaleDateString('es-DO')
-                    : '16/11/2026'}
+                    : '—'}
                 </div>
               </div>
 
               <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
                 <div className="text-xs text-slate-400 font-semibold">RNC Emisor</div>
                 <div className="font-mono font-bold text-slate-900 mt-1">
-                  {invoice?.rncEmisor || '131880738'}
+                  {invoice?.rncEmisor || '—'}
                 </div>
               </div>
             </div>
@@ -107,7 +113,7 @@ export default function PublicInvoiceViewPage() {
                   ITBIS Facturado (18%)
                 </div>
                 <div className="text-base font-bold text-slate-700 font-mono mt-0.5">
-                  DOP ${Number(invoice?.totalItbis || 97.9).toFixed(2)}
+                  DOP ${Number(invoice?.totalItbis || 0).toFixed(2)}
                 </div>
               </div>
 
@@ -116,7 +122,7 @@ export default function PublicInvoiceViewPage() {
                   Monto Total a Pagar
                 </div>
                 <div className="text-2xl font-black text-slate-950 font-mono mt-0.5">
-                  DOP ${Number(invoice?.montoTotal || 641.8).toFixed(2)}
+                  DOP ${Number(invoice?.montoTotal || 0).toFixed(2)}
                 </div>
               </div>
             </div>
@@ -124,7 +130,7 @@ export default function PublicInvoiceViewPage() {
             {/* Botones de Descarga */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               <a
-                href={`http://localhost:4000/v1/invoices/${id}/pdf?template=1`}
+                href={`${API_BASE_URL}/v1/invoices/${id}/pdf?template=1`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center justify-center gap-2 p-3 rounded-2xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm shadow-md shadow-sky-500/20 transition-all cursor-pointer"
@@ -134,7 +140,7 @@ export default function PublicInvoiceViewPage() {
               </a>
 
               <a
-                href={`http://localhost:4000/v1/invoices/${id}/xml`}
+                href={`${API_BASE_URL}/v1/invoices/${id}/xml`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center justify-center gap-2 p-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-200 font-bold text-sm border border-slate-700 transition-all cursor-pointer"
@@ -151,6 +157,7 @@ export default function PublicInvoiceViewPage() {
             Comprobante fiscal con valor tributario según Ley 32-23 de Facturación Electrónica en RD.
           </div>
         </div>
+        )}
       </main>
 
       {/* Footer General */}

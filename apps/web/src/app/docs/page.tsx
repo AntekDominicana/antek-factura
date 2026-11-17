@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { PublicNavbar } from '../../components/PublicNavbar';
 import { PublicFooter } from '../../components/PublicFooter';
+import { API_BASE_URL } from '../../lib/api';
 import {
   Code2,
   KeyRound,
@@ -49,9 +50,9 @@ export default function DocsPage() {
             Toda la documentación técnica del API, especificaciones de campos e-CF de la DGII y ejemplos de código JSON se encuentran unificados en un solo endpoint para alimentar a tu asistente de IA.
           </p>
           <div className="flex items-center gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800 font-mono text-xs text-sky-400">
-            <code className="flex-1 truncate">http://localhost:4000/v1/docs/llms-full.txt</code>
+            <code className="flex-1 truncate">{`${API_BASE_URL}/v1/docs/llms-full.txt`}</code>
             <a
-              href="http://localhost:4000/v1/docs/llms-full.txt"
+              href={`${API_BASE_URL}/v1/docs/llms-full.txt`}
               target="_blank"
               rel="noreferrer"
               className="px-3 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold flex items-center gap-1 transition"
@@ -104,13 +105,15 @@ export default function DocsPage() {
           </div>
 
           <pre className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto leading-relaxed border border-slate-800">
-{`curl -X POST http://localhost:4000/v1/invoices \\
+{`curl -X POST ${API_BASE_URL}/v1/invoices \\
   -H "Content-Type: application/json" \\
   -H "X-Api-Key: sec_live_antek_YOUR_API_KEY_HERE" \\
   -d '{
     "tipoEcf": 31,
-    "rncComprador": "132507908",
-    "razonSocialComprador": "CLIENTE EJEMPLO SRL",
+    "comprador": {
+      "rncComprador": "132507908",
+      "razonSocialComprador": "CLIENTE EJEMPLO SRL"
+    },
     "tipoPago": 1,
     "items": [
       {
