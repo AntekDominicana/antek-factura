@@ -27,7 +27,7 @@ const nextConfig = {
           {
             key: 'Content-Security-Policy',
             value:
-              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://localhost:4000 http://127.0.0.1:4000 https://ecf.dgii.gov.do https://fc.dgii.gov.do; frame-ancestors 'none';",
+              "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://antek-factura-api.onrender.com https://*.onrender.com http://localhost:4000 http://127.0.0.1:4000 https://ecf.dgii.gov.do https://fc.dgii.gov.do; frame-ancestors 'none';",
           },
         ],
       },
