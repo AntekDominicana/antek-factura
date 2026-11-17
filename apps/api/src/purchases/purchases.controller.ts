@@ -18,6 +18,7 @@ import {
   CommercialApprovalDto,
   ImportXmlPurchaseDto,
   ParseQrDto,
+  RegisterBatchQrDto,
   RegisterQrPurchaseDto,
 } from './dto/purchase.dto';
 
@@ -50,6 +51,17 @@ export class PurchasesController {
   ): Promise<any> {
     const tenantId = this.getEffectiveTenantId(req);
     return this.purchasesService.registerFromQr(tenantId, body);
+  }
+
+  @Post('register-batch')
+  @ApiOperation({ summary: 'Registra un lote de facturas QR escaneadas omitiendo duplicados en el Libro 606' })
+  @ApiHeader({ name: 'X-API-Key', required: false })
+  async registerBatch(
+    @Body() body: RegisterBatchQrDto,
+    @Req() req: any
+  ): Promise<any> {
+    const tenantId = this.getEffectiveTenantId(req);
+    return this.purchasesService.registerBatchFromQr(tenantId, body.items);
   }
 
   @Post('import-xml')

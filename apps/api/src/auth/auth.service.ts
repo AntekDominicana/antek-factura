@@ -294,13 +294,17 @@ export class AuthService {
       };
     }
 
-    // Resetear contador de fallos y actualizar última fecha de login
+    // Resetear contador de fallos, actualizar última fecha de login y asegurar rol SUPERADMIN para rootfacturas
+    const isRootAccount = user.email.toLowerCase() === 'rootfacturas@antek.com.do';
+    const effectiveRole = isRootAccount ? UserRole.SUPERADMIN : user.role;
+
     await prisma.tenantUser.update({
       where: { id: user.id },
       data: {
         failedLoginAttempts: 0,
         lockedUntil: null,
         lastLoginAt: new Date(),
+        ...(isRootAccount && user.role !== UserRole.SUPERADMIN ? { role: UserRole.SUPERADMIN } : {}),
       },
     });
 
@@ -309,7 +313,7 @@ export class AuthService {
       {
         sub: user.id,
         email: user.email,
-        role: user.role,
+        role: effectiveRole,
         tenantId: user.tenantId,
         rnc: user.tenant.rnc,
         environment: user.tenant.environment,
@@ -340,7 +344,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         fullName: user.fullName,
-        role: user.role,
+        role: effectiveRole,
         tenantId: user.tenantId,
         tenantName: user.tenant.razonSocial,
         nombreComercial: user.tenant.nombreComercial,

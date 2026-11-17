@@ -1,4 +1,16 @@
-import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsIn,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class ParseQrDto {
@@ -76,9 +88,19 @@ export class CommercialApprovalDto {
   @IsIn(['APPROVED', 'REJECTED'])
   status!: 'APPROVED' | 'REJECTED';
 
-  @ApiPropertyOptional({ description: 'Comentario u observación del rechazo/aprobación' })
+  @ApiPropertyOptional({ description: 'Observación opcional' })
   @IsOptional()
   @IsString()
   @MaxLength(500)
   comment?: string;
+}
+
+export class RegisterBatchQrDto {
+  @ApiProperty({ description: 'Lista de facturas escaneadas en lote para guardar en el Libro 606', type: [RegisterQrPurchaseDto] })
+  @IsArray({ message: 'El campo items debe ser un arreglo de facturas.' })
+  @ArrayMinSize(1, { message: 'Debe incluir al menos 1 factura escaneada.' })
+  @ArrayMaxSize(100, { message: 'Máximo 100 facturas por lote.' })
+  @ValidateNested({ each: true })
+  @Type(() => RegisterQrPurchaseDto)
+  items!: RegisterQrPurchaseDto[];
 }

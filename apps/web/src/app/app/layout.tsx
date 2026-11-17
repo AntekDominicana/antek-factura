@@ -35,6 +35,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState('ADMIN');
   const [subState, setSubState] = useState<{
     status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
     graceDaysRemaining?: number;
@@ -47,9 +48,12 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       if (raw) {
         const u = JSON.parse(raw);
         setUserName(u.fullName || u.email || '');
+        setUserRole(u.role || 'ADMIN');
         const emailLower = String(u.email || '').toLowerCase();
         setIsSuperAdmin(
-          u.role === 'SUPERADMIN' || emailLower === 'rootfacturas@antek.com.do'
+          u.role === 'SUPERADMIN' ||
+            emailLower === 'rootfacturas@antek.com.do' ||
+            emailLower === 'rootfacturas'
         );
       }
     } catch {}
@@ -108,6 +112,11 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     { href: '/app/settings/developers', label: 'API & Copilot IA', icon: Code2 },
     { href: '/app/settings/billing', label: 'Planes & Link Pago', icon: CreditCard },
   ];
+
+  const pageTitle =
+    [...mainNav, ...settingsNav].find(
+      (item) => pathname === item.href || (item.href !== '/app/dashboard' && pathname.startsWith(item.href))
+    )?.label || 'Portal Fiscal e-CF';
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row text-slate-800 selection:bg-sky-500 selection:text-white">
@@ -226,29 +235,45 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Desktop Top Action Bar */}
-        <header className="hidden lg:flex sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 px-8 h-14 items-center justify-between gap-4">
-          <div className="flex items-center gap-3 text-xs">
-            <span className="font-bold text-slate-800">{tenant?.razonSocial || 'Tu Empresa'}</span>
-            <span className="text-slate-300">|</span>
-            <span className="font-mono text-slate-500">RNC: {tenant?.rnc || '—'}</span>
-            {subState?.plan?.name && (
-              <span className="px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-bold text-[10px]">
-                {subState.plan.name}
-              </span>
-            )}
+        <header className="hidden lg:flex sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 xl:px-8 h-16 items-center justify-between gap-4 shadow-2xs">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-black text-slate-900 tracking-tight truncate">
+                  {pageTitle}
+                </h2>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  DGII Ley 32-23
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5 truncate">
+                <span className="font-semibold text-slate-700 truncate max-w-[220px]">
+                  {tenant?.razonSocial || 'Tu Empresa'}
+                </span>
+                <span>•</span>
+                <span className="font-mono">RNC {tenant?.rnc || 'Pendiente'}</span>
+                {subState?.plan?.name && (
+                  <>
+                    <span>•</span>
+                    <span className="font-bold text-sky-700">{subState.plan.name}</span>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 shrink-0">
             <Link
               href="/app/purchases?scan=1"
-              className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-1.5 transition"
+              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-xs transition"
             >
               <QrCode className="w-3.5 h-3.5 text-sky-400" />
-              <span>Escanear Factura QR</span>
+              <span>Escanear Lote QR</span>
             </Link>
             <Link
               href="/app/invoices/new"
-              className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition"
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm shadow-sky-600/20 transition"
             >
               <FilePlus2 className="w-3.5 h-3.5" />
               <span>Nueva Factura e-CF</span>
@@ -256,12 +281,29 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
             {isSuperAdmin && (
               <Link
                 href="/superadmin"
-                className="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 border border-amber-300 font-bold text-xs inline-flex items-center gap-1.5 transition"
+                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs inline-flex items-center gap-1.5 transition"
               >
                 <Crown className="w-3.5 h-3.5 text-amber-600" />
                 <span>Super-Admin</span>
               </Link>
             )}
+            <Link
+              href="/app/settings/profile"
+              className="ml-1 pl-2 pr-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200/80 border border-slate-200 flex items-center gap-2 transition"
+              title="Mi Perfil y Suscripción"
+            >
+              <span className="w-7 h-7 rounded-full bg-gradient-to-tr from-sky-600 to-indigo-600 text-white text-[11px] font-black flex items-center justify-center uppercase">
+                {(userName || 'U').slice(0, 2)}
+              </span>
+              <span className="text-left leading-tight hidden xl:block">
+                <span className="block text-[11px] font-bold text-slate-900 max-w-[110px] truncate">
+                  {userName || 'Usuario'}
+                </span>
+                <span className="block text-[9px] font-bold text-sky-700 uppercase">
+                  {isSuperAdmin ? 'SUPERADMIN' : userRole}
+                </span>
+              </span>
+            </Link>
           </div>
         </header>
 

@@ -2996,7 +2996,15 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         rawPurchases = dbPur;
       }
     } catch {}
-    const scopedReceived = rawPurchases.map((p) => this.normalizeReceivedPurchase(p));
+    const seenReceived = new Set<string>();
+    const scopedReceived = rawPurchases
+      .map((p) => this.normalizeReceivedPurchase(p))
+      .filter((pur) => {
+        const key = `${pur.rncProveedor}|${pur.ncf}`;
+        if (seenReceived.has(key)) return false;
+        seenReceived.add(key);
+        return true;
+      });
 
     const salesInvoices = scopedInvoices.filter(
       (i) => salesTypes.includes(i.tipoEcf) && i.status !== 'REJECTED'

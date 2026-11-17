@@ -337,6 +337,16 @@ export default function SuperAdminPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {tenants.length > 0 && (
+            <button
+              type="button"
+              onClick={() => openInvoiceLinkModal(tenants[0])}
+              className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Enviar Link de Pago</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={loadData}
@@ -1029,10 +1039,23 @@ export default function SuperAdminPage() {
           >
             <div>
               <h3 className="font-black text-white text-lg">Enviar Factura / Link de Pago al Cliente</h3>
-              <p className="text-slate-400 mt-0.5">
-                Cliente: <strong className="text-white">{invoiceModalTenant.razonSocial}</strong> (RNC{' '}
-                {invoiceModalTenant.rnc})
-              </p>
+              <div className="mt-2">
+                <label className="block font-bold text-slate-300 mb-1">Seleccionar Cliente / Empresa</label>
+                <select
+                  value={invoiceModalTenant.id}
+                  onChange={(e) => {
+                    const found = tenants.find((item) => item.id === e.target.value);
+                    if (found) openInvoiceLinkModal(found);
+                  }}
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-semibold"
+                >
+                  {tenants.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.razonSocial} (RNC {item.rnc}) — {item.correo}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

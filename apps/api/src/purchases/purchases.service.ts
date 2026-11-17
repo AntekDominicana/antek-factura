@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { prisma } from '@factura-ecf/database';
 import { RncService } from '../rnc/rnc.service';
 import * as crypto from 'crypto';
@@ -223,9 +223,18 @@ export class PurchasesService {
 
     const tipoGasto = payload.tipoGasto606 || '02';
 
-    let purchase: any;
+    const existingMem = this.inMemoryPurchases.find(
+      (p) => p.tenantId === tenantId && p.rncEmisor === parsed.rncEmisor && p.encf === parsed.encf
+    );
+    if (existingMem) {
+      throw new ConflictException(
+        `La factura ${parsed.encf} del RNC ${parsed.rncEmisor} ya fue registrada anteriormente en tu Libro Contable (606).`
+      );
+    }
+
+    let existingDb: any = null;
     try {
-      purchase = await prisma.receivedPurchase.upsert({
+      existingDb = await prisma.receivedPurchase.findUnique({
         where: {
           tenantId_rncEmisor_encf: {
             tenantId,
@@ -233,14 +242,20 @@ export class PurchasesService {
             encf: parsed.encf,
           },
         },
-        update: {
-          razonSocialEmisor: parsed.razonSocialEmisor,
-          montoTotal: parsed.montoTotal,
-          totalItbis: parsed.totalItbis,
-          fechaEmision: parsed.fechaEmision,
-          tipoGasto606: tipoGasto,
-        },
-        create: {
+        select: { id: true, encf: true, rncEmisor: true },
+      });
+    } catch {}
+
+    if (existingDb) {
+      throw new ConflictException(
+        `La factura ${parsed.encf} del RNC ${parsed.rncEmisor} ya fue registrada anteriormente en tu Libro Contable (606).`
+      );
+    }
+
+    let purchase: any;
+    try {
+      purchase = await prisma.receivedPurchase.create({
+        data: {
           tenantId,
           rncEmisor: parsed.rncEmisor,
           razonSocialEmisor: parsed.razonSocialEmisor,
@@ -253,11 +268,13 @@ export class PurchasesService {
           commercialStatus: 'PENDING',
         },
       });
-    } catch {
-      // Fallback in-memory
-      const idx = this.inMemoryPurchases.findIndex(
-        (p) => p.tenantId === tenantId && p.rncEmisor === parsed.rncEmisor && p.encf === parsed.encf
-      );
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          `La factura ${parsed.encf} del RNC ${parsed.rncEmisor} ya fue registrada anteriormente en tu Libro Contable (606).`
+        );
+      }
+      // Fallback in-memory solo si la BD no responde
       const record = {
         id: `purch_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         tenantId,
@@ -273,13 +290,8 @@ export class PurchasesService {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      if (idx >= 0) {
-        this.inMemoryPurchases[idx] = { ...this.inMemoryPurchases[idx], ...record };
-        purchase = this.inMemoryPurchases[idx];
-      } else {
-        this.inMemoryPurchases.push(record);
-        purchase = record;
-      }
+      this.inMemoryPurchases.push(record);
+      purchase = record;
     }
 
     return {
@@ -297,6 +309,70 @@ export class PurchasesService {
         montoTotal: parsed.montoTotal,
         estado: 'Aceptado',
       },
+    };
+  }
+
+  /**
+   * Registra múltiples facturas QR escaneadas en lote omitiendo duplicados
+   */
+  public async registerBatchFromQr(
+    tenantId: string,
+    items: Array<{
+      qrRaw?: string;
+      rncEmisor?: string;
+      razonSocialEmisor?: string;
+      encf?: string;
+      fechaEmision?: string;
+      montoTotal?: number;
+      totalItbis?: number;
+      tipoGasto606?: string;
+    }>
+  ): Promise<{
+    success: boolean;
+    savedCount: number;
+    duplicateCount: number;
+    errorCount: number;
+    saved: any[];
+    duplicates: Array<{ encf?: string; rncEmisor?: string; message: string }>;
+    errors: Array<{ encf?: string; rncEmisor?: string; message: string }>;
+    message: string;
+  }> {
+    const saved: any[] = [];
+    const duplicates: Array<{ encf?: string; rncEmisor?: string; message: string }> = [];
+    const errors: Array<{ encf?: string; rncEmisor?: string; message: string }> = [];
+
+    for (const item of items) {
+      try {
+        const res = await this.registerFromQr(tenantId, item);
+        if (res?.purchase) saved.push(res.purchase);
+      } catch (err: any) {
+        if (err instanceof ConflictException || err?.status === 409) {
+          duplicates.push({
+            encf: item.encf,
+            rncEmisor: item.rncEmisor,
+            message: err?.message || 'Factura duplicada omitida.',
+          });
+        } else {
+          errors.push({
+            encf: item.encf,
+            rncEmisor: item.rncEmisor,
+            message: err?.message || 'Error al registrar factura.',
+          });
+        }
+      }
+    }
+
+    return {
+      success: true,
+      savedCount: saved.length,
+      duplicateCount: duplicates.length,
+      errorCount: errors.length,
+      saved,
+      duplicates,
+      errors,
+      message: `${saved.length} factura(s) guardada(s) en el Libro 606${
+        duplicates.length > 0 ? ` (${duplicates.length} duplicada(s) omitida(s))` : ''
+      }.`,
     };
   }
 
@@ -338,9 +414,9 @@ export class PurchasesService {
 
     const xmlHash = crypto.createHash('sha256').update(xml).digest('hex');
 
-    let purchase: any;
+    let existingXmlDb: any = null;
     try {
-      purchase = await prisma.receivedPurchase.upsert({
+      existingXmlDb = await prisma.receivedPurchase.findUnique({
         where: {
           tenantId_rncEmisor_encf: {
             tenantId,
@@ -348,16 +424,19 @@ export class PurchasesService {
             encf,
           },
         },
-        update: {
-          razonSocialEmisor,
-          montoTotal,
-          totalItbis,
-          fechaEmision,
-          tipoGasto606: payload.tipoGasto606 || '02',
-          xmlContent: xml,
-          xmlHash,
-        },
-        create: {
+        select: { id: true },
+      });
+    } catch {}
+    if (existingXmlDb) {
+      throw new ConflictException(
+        `El comprobante XML ${encf} del RNC ${rncEmisor} ya existe en tu Libro Contable (606).`
+      );
+    }
+
+    let purchase: any;
+    try {
+      purchase = await prisma.receivedPurchase.create({
+        data: {
           tenantId,
           rncEmisor,
           razonSocialEmisor,
@@ -372,7 +451,12 @@ export class PurchasesService {
           commercialStatus: 'PENDING',
         },
       });
-    } catch {
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          `El comprobante XML ${encf} del RNC ${rncEmisor} ya existe en tu Libro Contable (606).`
+        );
+      }
       const record = {
         id: `purch_${Date.now()}_${Math.random().toString(36).substring(7)}`,
         tenantId,
@@ -510,10 +594,18 @@ export class PurchasesService {
       if (tenant?.rnc) rnc = tenant.rnc;
     } catch {}
 
-    const lines: string[] = [];
-    lines.push(`606|${rnc}|${periodo || new Date().toISOString().slice(0, 7).replace('-', '')}|${purchases.length}`);
+    const seen606 = new Set<string>();
+    const uniquePurchases = purchases.filter((p: any) => {
+      const k = `${p.rncEmisor}|${p.encf}`;
+      if (seen606.has(k)) return false;
+      seen606.add(k);
+      return true;
+    });
 
-    purchases.forEach((p: any) => {
+    const lines: string[] = [];
+    lines.push(`606|${rnc}|${periodo || new Date().toISOString().slice(0, 7).replace('-', '')}|${uniquePurchases.length}`);
+
+    uniquePurchases.forEach((p: any) => {
       const rncCedula = p.rncEmisor;
       const tipoId = rncCedula.length === 9 ? '1' : '2';
       const tipoGasto = p.tipoGasto606 || '02';

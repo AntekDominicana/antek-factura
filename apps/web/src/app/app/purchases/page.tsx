@@ -22,6 +22,9 @@ import {
   ImagePlus,
   Edit3,
   BookOpen,
+  Trash2,
+  Plus,
+  Layers,
 } from 'lucide-react';
 import { apiFetch, apiDownload } from '../../../lib/api';
 import { useApp } from '../../../context/AppContext';
@@ -68,6 +71,48 @@ const TIPO_GASTO_606_OPTIONS: Record<string, string> = {
 };
 
 type ScanMode = 'camera' | 'image' | 'manual';
+
+interface QueuedQrItem {
+  id: string;
+  qrRaw?: string;
+  rncEmisor: string;
+  razonSocialEmisor: string;
+  encf: string;
+  fechaEmision: string;
+  montoTotal: number;
+  totalItbis: number;
+  tipoGasto606: string;
+}
+
+function playScanTone(type: 'ok' | 'dup') {
+  if (typeof window === 'undefined') return;
+  try {
+    if (navigator.vibrate) {
+      navigator.vibrate(type === 'ok' ? 75 : [70, 50, 70]);
+    }
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    if (type === 'ok') {
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1175, ctx.currentTime + 0.06);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.16);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.17);
+    } else {
+      osc.frequency.setValueAtTime(260, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.23);
+    }
+  } catch {}
+}
 
 function normalizeDgiiDateLocal(rawDate?: string): string {
   const today = new Date().toISOString().split('T')[0];
@@ -207,10 +252,26 @@ function PurchasesContent() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [decodingImage, setDecodingImage] = useState(false);
-  const [autoSaveQr, setAutoSaveQr] = useState(true);
+  const [autoSaveQr, setAutoSaveQr] = useState(false);
+  const [batchMode, setBatchMode] = useState(true);
+  const [scanQueue, setScanQueue] = useState<QueuedQrItem[]>([]);
+  const [duplicateAlert, setDuplicateAlert] = useState('');
+  const [savingBatch, setSavingBatch] = useState(false);
   const detectingRef = useRef(false);
   const lastScanTsRef = useRef(0);
   const scanPassRef = useRef(0);
+  const lastDecodedRawRef = useRef('');
+  const lastDecodedAtRef = useRef(0);
+  const scanQueueRef = useRef<QueuedQrItem[]>([]);
+  const purchasesRef = useRef<PurchaseItem[]>([]);
+
+  useEffect(() => {
+    scanQueueRef.current = scanQueue;
+  }, [scanQueue]);
+
+  useEffect(() => {
+    purchasesRef.current = purchases;
+  }, [purchases]);
 
   // Formulario XML
   const [xmlText, setXmlText] = useState('');
@@ -262,11 +323,23 @@ function PurchasesContent() {
 
   const parseDecodedQr = useCallback(
     async (rawQrText: string) => {
+      const nowMs = Date.now();
+      if (
+        batchMode &&
+        rawQrText === lastDecodedRawRef.current &&
+        nowMs - lastDecodedAtRef.current < 1500
+      ) {
+        return;
+      }
+      lastDecodedRawRef.current = rawQrText;
+      lastDecodedAtRef.current = nowMs;
+
       setQrInput(rawQrText);
       setErrorMsg('');
+      setDuplicateAlert('');
       setSuccessMsg('');
 
-      // 1. Parseo instantáneo local (<1ms) para mostrar el comprobante sin esperar red
+      // 1. Parseo instantáneo local (<1ms)
       const input = rawQrText.trim().replace(/&amp;/g, '&');
       let localParsed: DgiiVerificationData | null = null;
       try {
@@ -297,20 +370,68 @@ function PurchasesContent() {
             montoTotal: isNaN(montoTotal) ? 0 : montoTotal,
             estado: 'Aceptado',
           };
-          setPreviewData(localParsed);
-          setManualFields({
-            rncEmisor,
-            razonSocialEmisor: `RNC ${rncEmisor}`,
-            encf,
-            fechaEmision,
-            montoTotal: String(isNaN(montoTotal) ? 0 : montoTotal),
-            totalItbis: String(isNaN(totalItbis) ? 0 : totalItbis),
-          });
         }
       } catch {}
 
-      // 2. Si autoSaveQr está activo y tenemos datos válidos, guardar directo en Libro 606
-      if (autoSaveQr && localParsed) {
+      if (localParsed) {
+        // Control estricto anti-duplicados (Libro 606 ya guardado)
+        const alreadySaved = purchasesRef.current.some(
+          (p) => p.rncEmisor === localParsed!.rncEmisor && p.encf === localParsed!.encf
+        );
+        if (alreadySaved) {
+          playScanTone('dup');
+          setDuplicateAlert(
+            `⚠ Factura duplicada: ${localParsed.encf} (RNC ${localParsed.rncEmisor}) ya fue registrada en tu Libro Contable / Excel. No se agregará de nuevo.`
+          );
+          return;
+        }
+
+        // Modo Lote (10+ facturas continuas)
+        if (batchMode) {
+          const alreadyInQueue = scanQueueRef.current.some(
+            (q) => q.rncEmisor === localParsed!.rncEmisor && q.encf === localParsed!.encf
+          );
+          if (alreadyInQueue) {
+            playScanTone('dup');
+            setDuplicateAlert(
+              `⚠ Ya escaneaste ${localParsed.encf} (RNC ${localParsed.rncEmisor}) en este lote. Pasa a la siguiente factura.`
+            );
+            return;
+          }
+
+          playScanTone('ok');
+          const newItem: QueuedQrItem = {
+            id: `${localParsed.rncEmisor}-${localParsed.encf}-${Date.now()}`,
+            qrRaw: rawQrText,
+            rncEmisor: localParsed.rncEmisor,
+            razonSocialEmisor: localParsed.razonSocialEmisor,
+            encf: localParsed.encf,
+            fechaEmision: localParsed.fechaEmision,
+            montoTotal: localParsed.montoTotal,
+            totalItbis: localParsed.totalItbis,
+            tipoGasto606: selectedGasto,
+          };
+          setScanQueue((prev) => [...prev, newItem]);
+          setSuccessMsg(
+            `✓ #${scanQueueRef.current.length + 1} agregada al lote: ${localParsed.encf} — DOP $${localParsed.montoTotal.toFixed(2)}`
+          );
+          return;
+        }
+
+        playScanTone('ok');
+        setPreviewData(localParsed);
+        setManualFields({
+          rncEmisor: localParsed.rncEmisor,
+          razonSocialEmisor: localParsed.razonSocialEmisor,
+          encf: localParsed.encf,
+          fechaEmision: localParsed.fechaEmision,
+          montoTotal: String(localParsed.montoTotal),
+          totalItbis: String(localParsed.totalItbis),
+        });
+      }
+
+      // 2. Si está en modo Individual con autoSaveQr, guardar directo en Libro 606
+      if (!batchMode && autoSaveQr && localParsed) {
         try {
           setSubmitting(true);
           const savedRes = await apiFetch<any>('/v1/purchases/register-qr', {
@@ -327,30 +448,27 @@ function PurchasesContent() {
           });
           if (savedRes?.verifiedDgii) {
             setPreviewData(savedRes.verifiedDgii);
-            setManualFields({
-              rncEmisor: savedRes.verifiedDgii.rncEmisor || localParsed.rncEmisor,
-              razonSocialEmisor: savedRes.verifiedDgii.razonSocialEmisor || localParsed.razonSocialEmisor,
-              encf: savedRes.verifiedDgii.encf || localParsed.encf,
-              fechaEmision: savedRes.verifiedDgii.fechaEmision || localParsed.fechaEmision,
-              montoTotal: String(savedRes.verifiedDgii.montoTotal ?? localParsed.montoTotal),
-              totalItbis: String(savedRes.verifiedDgii.totalItbis ?? localParsed.totalItbis),
-            });
           }
           setSuccessMsg(
             `✓ Factura ${savedRes?.purchase?.encf || localParsed.encf} leída y guardada en tu Libro de Contabilidad (606).`
           );
           await loadPurchases();
         } catch (saveErr: any) {
-          setErrorMsg(
-            saveErr?.message || 'Se leyó el QR, pero no se pudo guardar automáticamente. Revisa tu sesión e intenta guardar.'
-          );
+          if (saveErr?.status === 409) {
+            playScanTone('dup');
+            setDuplicateAlert(saveErr.message);
+          } else {
+            setErrorMsg(
+              saveErr?.message || 'Se leyó el QR, pero no se pudo guardar automáticamente.'
+            );
+          }
         } finally {
           setSubmitting(false);
         }
         return;
       }
 
-      // 3. Enriquecimiento en servidor si no se guardó automáticamente
+      // 3. Enriquecimiento en servidor en modo Individual
       try {
         const res = await apiFetch<any>('/v1/purchases/parse-qr', {
           method: 'POST',
@@ -385,14 +503,14 @@ function PurchasesContent() {
         }
       }
     },
-    [tenant?.rnc, tenant?.razonSocial, autoSaveQr, selectedGasto]
+    [tenant?.rnc, tenant?.razonSocial, autoSaveQr, batchMode, selectedGasto]
   );
 
   const startCamera = useCallback(async () => {
     setCameraError('');
     setErrorMsg('');
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraError('Este navegador o dispositivo no soporta acceso a cámara. Puedes subir una foto o pegar el QR.');
+      setCameraError('Este navegador o dispositivo no soporta acceso a cámara. Puedes subir fotos o pegar el QR.');
       return;
     }
 
@@ -437,18 +555,18 @@ function PurchasesContent() {
         if (
           video.readyState === video.HAVE_ENOUGH_DATA &&
           video.videoWidth > 0 &&
-          now - lastScanTsRef.current >= 85
+          now - lastScanTsRef.current >= 60
         ) {
           lastScanTsRef.current = now;
 
-          // Motor 1: BarcodeDetector nativo (acelerado por hardware)
+          // Motor 1: BarcodeDetector nativo (hardware)
           if (barcodeDetector && !detectingRef.current) {
             detectingRef.current = true;
             barcodeDetector
               .detect(video)
               .then((detected: any[]) => {
                 if (detected?.length && detected[0]?.rawValue && streamRef.current) {
-                  stopCamera();
+                  if (!batchMode) stopCamera();
                   parseDecodedQr(String(detected[0].rawValue));
                 }
               })
@@ -458,18 +576,18 @@ function PurchasesContent() {
               });
           }
 
-          // Motor 2: jsQR rápido alternando recorte central (480px) y cuadro completo (640px)
+          // Motor 2: jsQR ultra rápido sobre recorte central 400px (y cuadro completo cada 4 pasadas)
           const vw = video.videoWidth;
           const vh = video.videoHeight;
-          const useCenterCrop = scanPassRef.current % 2 === 0;
+          const useFullFrame = scanPassRef.current % 4 === 3;
           scanPassRef.current += 1;
 
-          const sx = useCenterCrop ? Math.floor(vw * 0.175) : 0;
-          const sy = useCenterCrop ? Math.floor(vh * 0.175) : 0;
-          const sw = useCenterCrop ? Math.floor(vw * 0.65) : vw;
-          const sh = useCenterCrop ? Math.floor(vh * 0.65) : vh;
+          const sx = useFullFrame ? 0 : Math.floor(vw * 0.2);
+          const sy = useFullFrame ? 0 : Math.floor(vh * 0.2);
+          const sw = useFullFrame ? vw : Math.floor(vw * 0.6);
+          const sh = useFullFrame ? vh : Math.floor(vh * 0.6);
 
-          const maxDim = useCenterCrop ? 480 : 640;
+          const maxDim = useFullFrame ? 640 : 400;
           const scale = Math.min(1, maxDim / Math.max(sw, sh));
           const dw = Math.max(1, Math.round(sw * scale));
           const dh = Math.max(1, Math.round(sh * scale));
@@ -484,9 +602,12 @@ function PurchasesContent() {
               inversionAttempts: 'attemptBoth',
             });
             if (code?.data) {
-              stopCamera();
+              if (!batchMode) {
+                stopCamera();
+                parseDecodedQr(code.data);
+                return;
+              }
               parseDecodedQr(code.data);
-              return;
             }
           }
         }
@@ -498,11 +619,11 @@ function PurchasesContent() {
       setCameraError('No se pudo activar la cámara en vivo. Usa el botón de Cámara Nativa o "Subir Foto".');
       setCameraActive(false);
     }
-  }, [parseDecodedQr, stopCamera]);
+  }, [parseDecodedQr, stopCamera, batchMode]);
 
   // Encender/apagar cámara automáticamente según modal y pestaña
   useEffect(() => {
-    if (qrModalOpen && scanMode === 'camera' && !previewData) {
+    if (qrModalOpen && scanMode === 'camera' && (batchMode || !previewData)) {
       startCamera();
     } else {
       stopCamera();
@@ -510,45 +631,54 @@ function PurchasesContent() {
     return () => {
       stopCamera();
     };
-  }, [qrModalOpen, scanMode, previewData, startCamera, stopCamera]);
+  }, [qrModalOpen, scanMode, batchMode, previewData, startCamera, stopCamera]);
 
-  // Subir imagen/foto o captura nativa del QR y decodificar con multi-escala (BarcodeDetector + jsQR)
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Subir una o varias imágenes/fotos y decodificarlas todas con multi-escala (BarcodeDetector + jsQR)
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (files.length === 0) return;
     e.target.value = '';
     setErrorMsg('');
+    setDuplicateAlert('');
     setDecodingImage(true);
 
-    const reader = new FileReader();
-    reader.onerror = () => {
-      setDecodingImage(false);
-      setErrorMsg('No se pudo cargar la imagen seleccionada.');
-    };
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = async () => {
-        try {
-          const decodedText = await decodeQrFromImageElement(img);
-          if (decodedText) {
-            stopCamera();
-            await parseDecodedQr(decodedText);
-          } else {
-            setErrorMsg(
-              'No se detectó un código QR legible en la foto. Acerca más la cámara al cuadro QR con buena iluminación o usa "URL / Manual".'
-            );
-          }
-        } finally {
-          setDecodingImage(false);
+    let failedCount = 0;
+    try {
+      for (const file of files) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('read_error'));
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.readAsDataURL(file);
+        });
+
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('img_error'));
+          el.src = dataUrl;
+        });
+
+        const decodedText = await decodeQrFromImageElement(img);
+        if (decodedText) {
+          if (!batchMode) stopCamera();
+          await parseDecodedQr(decodedText);
+        } else {
+          failedCount++;
         }
-      };
-      img.onerror = () => {
-        setDecodingImage(false);
-        setErrorMsg('No se pudo leer el archivo de imagen seleccionado.');
-      };
-      img.src = String(reader.result || '');
-    };
-    reader.readAsDataURL(file);
+      }
+      if (failedCount > 0) {
+        setErrorMsg(
+          failedCount === files.length
+            ? 'No se detectó un código QR legible en la foto. Acerca más la cámara al cuadro QR con buena iluminación.'
+            : `${failedCount} foto(s) no tenían QR legible; las demás fueron procesadas.`
+        );
+      }
+    } catch {
+      setErrorMsg('No se pudo procesar alguna de las imágenes seleccionadas.');
+    } finally {
+      setDecodingImage(false);
+    }
   };
 
   // Autocompletar Razón Social DGII al escribir RNC en modo manual
@@ -625,9 +755,60 @@ function PurchasesContent() {
         }, 1200);
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Error al guardar la factura en el libro de contabilidad.');
+      if (err?.status === 409) {
+        playScanTone('dup');
+        setDuplicateAlert(err.message);
+      } else {
+        setErrorMsg(err?.message || 'Error al guardar la factura en el libro de contabilidad.');
+      }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSaveBatch = async () => {
+    if (scanQueue.length === 0) return;
+    try {
+      setSavingBatch(true);
+      setErrorMsg('');
+      setDuplicateAlert('');
+      const res = await apiFetch<any>('/v1/purchases/register-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: scanQueue.map((item) => ({
+            qrRaw: item.qrRaw,
+            rncEmisor: item.rncEmisor,
+            razonSocialEmisor: item.razonSocialEmisor,
+            encf: item.encf,
+            fechaEmision: item.fechaEmision,
+            montoTotal: item.montoTotal,
+            totalItbis: item.totalItbis,
+            tipoGasto606: item.tipoGasto606,
+          })),
+        }),
+      });
+
+      setSuccessMsg(
+        res?.message || `${res?.savedCount || scanQueue.length} factura(s) guardada(s) en el Libro 606.`
+      );
+      if (res?.duplicateCount > 0) {
+        setDuplicateAlert(
+          `${res.duplicateCount} factura(s) duplicada(s) omitida(s) porque ya existían en tu Libro Contable / Excel.`
+        );
+      }
+      setScanQueue([]);
+      await loadPurchases();
+      if (!res?.duplicateCount && !res?.errorCount) {
+        setTimeout(() => {
+          stopCamera();
+          setQrModalOpen(false);
+          setSuccessMsg('');
+        }, 1400);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Error al guardar el lote de facturas.');
+    } finally {
+      setSavingBatch(false);
     }
   };
 
@@ -1041,8 +1222,42 @@ function PurchasesContent() {
               </button>
             </div>
 
-            {/* Selector de Modo de Escaneo */}
-            <div className="px-6 pt-4">
+            {/* Selector de Modo de Escaneo + Modo Lote */}
+            <div className="px-6 pt-4 space-y-2.5">
+              <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-sky-50 border border-sky-200 text-xs">
+                <div className="flex items-center gap-2 font-bold text-sky-900">
+                  <Layers className="w-4 h-4 text-sky-600 shrink-0" />
+                  <span>{batchMode ? 'Escaneo Rápido en Lote (10+ facturas)' : 'Escaneo Individual'}</span>
+                </div>
+                <div className="flex items-center gap-1 p-0.5 bg-white rounded-lg border border-sky-200 font-bold text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchMode(true);
+                      setPreviewData(null);
+                      setDuplicateAlert('');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition cursor-pointer ${
+                      batchMode ? 'bg-sky-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Lote (10+)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchMode(false);
+                      setDuplicateAlert('');
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition cursor-pointer ${
+                      !batchMode ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    1 por 1
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl text-xs font-bold">
                 <button
                   type="button"
@@ -1151,11 +1366,11 @@ function PurchasesContent() {
                   </div>
                   <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs cursor-pointer transition">
                     <UploadCloud className="w-4 h-4" />
-                    {decodingImage ? 'Analizando Foto...' : 'Elegir Foto / Captura (PNG, JPG)'}
+                    {decodingImage ? 'Analizando Foto(s)...' : 'Elegir Una o Varias Fotos (PNG, JPG)'}
                     <input
                       type="file"
                       accept="image/*"
-                      capture="environment"
+                      multiple
                       className="hidden"
                       onChange={handleImageUpload}
                     />
@@ -1247,6 +1462,64 @@ function PurchasesContent() {
                       </div>
                     </div>
                   </div>
+                  {batchMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cleanRnc = manualFields.rncEmisor.replace(/\D/g, '');
+                        const cleanEncf = manualFields.encf.trim().toUpperCase();
+                        if (!cleanRnc || !cleanEncf) {
+                          setErrorMsg('Completa el RNC Emisor y e-NCF para agregar al lote.');
+                          return;
+                        }
+                        if (purchases.some((p) => p.rncEmisor === cleanRnc && p.encf === cleanEncf)) {
+                          playScanTone('dup');
+                          setDuplicateAlert(
+                            `⚠ Factura duplicada: ${cleanEncf} (RNC ${cleanRnc}) ya existe en tu Libro Contable / Excel.`
+                          );
+                          return;
+                        }
+                        if (scanQueue.some((q) => q.rncEmisor === cleanRnc && q.encf === cleanEncf)) {
+                          playScanTone('dup');
+                          setDuplicateAlert(`⚠ Ya agregaste ${cleanEncf} (RNC ${cleanRnc}) a este lote.`);
+                          return;
+                        }
+                        playScanTone('ok');
+                        setDuplicateAlert('');
+                        setErrorMsg('');
+                        const mTotal = parseFloat(manualFields.montoTotal || '0') || 0;
+                        const mItbis = parseFloat(manualFields.totalItbis || '0') || 0;
+                        setScanQueue((prev) => [
+                          ...prev,
+                          {
+                            id: `${cleanRnc}-${cleanEncf}-${Date.now()}`,
+                            qrRaw: qrInput.trim() || undefined,
+                            rncEmisor: cleanRnc,
+                            razonSocialEmisor: manualFields.razonSocialEmisor.trim() || `RNC ${cleanRnc}`,
+                            encf: cleanEncf,
+                            fechaEmision: manualFields.fechaEmision || new Date().toISOString().split('T')[0],
+                            montoTotal: mTotal,
+                            totalItbis: mItbis,
+                            tipoGasto606: selectedGasto,
+                          },
+                        ]);
+                        setSuccessMsg(`✓ ${cleanEncf} agregada al lote.`);
+                        setQrInput('');
+                        setManualFields({
+                          rncEmisor: '',
+                          razonSocialEmisor: '',
+                          encf: '',
+                          fechaEmision: new Date().toISOString().split('T')[0],
+                          montoTotal: '',
+                          totalItbis: '',
+                        });
+                      }}
+                      className="w-full py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Agregar Factura al Lote</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1279,6 +1552,13 @@ function PurchasesContent() {
                 </select>
               </div>
 
+              {duplicateAlert && (
+                <div className="p-3 bg-amber-50 border-2 border-amber-300 rounded-xl text-xs text-amber-900 font-bold flex items-center gap-2 animate-in fade-in duration-150">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>{duplicateAlert}</span>
+                </div>
+              )}
+
               {errorMsg && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1302,8 +1582,74 @@ function PurchasesContent() {
                 </div>
               )}
 
-              {/* Tarjeta de Verificación DGII tras leer el QR */}
-              {previewData && (
+              {/* Cola de Facturas Escaneadas en Lote */}
+              {batchMode && scanQueue.length > 0 && (
+                <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+                  <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between text-xs">
+                    <span className="font-extrabold">
+                      Lote Escaneado: {scanQueue.length} factura(s)
+                    </span>
+                    <span className="font-mono font-bold text-sky-300">
+                      Total: DOP ${scanQueue.reduce((s, i) => s + Number(i.montoTotal || 0), 0).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto text-xs">
+                    {scanQueue.map((item, idx) => (
+                      <div key={item.id} className="p-2.5 px-3 flex items-center justify-between gap-2 hover:bg-slate-50">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold text-[10px]">
+                              #{idx + 1}
+                            </span>
+                            <span className="font-mono font-bold text-slate-900 truncate">{item.encf}</span>
+                            <span className="text-[11px] text-slate-400 font-mono">RNC {item.rncEmisor}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <select
+                              value={item.tipoGasto606}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setScanQueue((prev) =>
+                                  prev.map((q) => (q.id === item.id ? { ...q, tipoGasto606: val } : q))
+                                );
+                              }}
+                              className="text-[10px] bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 font-semibold max-w-[180px]"
+                            >
+                              {Object.entries(TIPO_GASTO_606_OPTIONS).map(([k, v]) => (
+                                <option key={k} value={k}>
+                                  {v}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="text-[10px] text-slate-500 font-mono">{item.fechaEmision}</span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0 flex items-center gap-2">
+                          <div>
+                            <div className="font-mono font-bold text-slate-900">
+                              ${item.montoTotal.toFixed(2)}
+                            </div>
+                            <div className="font-mono text-[10px] text-emerald-700">
+                              ITBIS ${item.totalItbis.toFixed(2)}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setScanQueue((prev) => prev.filter((q) => q.id !== item.id))}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                            title="Quitar del lote"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Tarjeta de Verificación DGII tras leer el QR (Modo Individual) */}
+              {!batchMode && previewData && (
                 <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
                   <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -1359,7 +1705,7 @@ function PurchasesContent() {
             </div>
 
             {/* Modal Actions */}
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
               <button
                 type="button"
                 onClick={() => {
@@ -1368,16 +1714,29 @@ function PurchasesContent() {
                 }}
                 className="px-4 py-2 rounded-xl text-slate-600 font-semibold text-xs hover:bg-slate-200 transition-all cursor-pointer"
               >
-                Cancelar
+                Cerrar
               </button>
-              <button
-                type="button"
-                disabled={!canConfirmScan || submitting}
-                onClick={handleRegisterQr}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white font-bold text-xs shadow-md shadow-sky-500/20 disabled:opacity-50 transition-all cursor-pointer"
-              >
-                {submitting ? 'Guardando en Libro 606...' : 'Guardar en Libro de Contabilidad (606)'}
-              </button>
+              {batchMode ? (
+                <button
+                  type="button"
+                  disabled={scanQueue.length === 0 || savingBatch}
+                  onClick={handleSaveBatch}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-md shadow-emerald-500/20 disabled:opacity-50 transition-all cursor-pointer"
+                >
+                  {savingBatch
+                    ? 'Guardando lote en Libro 606...'
+                    : `Guardar ${scanQueue.length} Factura(s) en Libro Contable (606)`}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!canConfirmScan || submitting}
+                  onClick={handleRegisterQr}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white font-bold text-xs shadow-md shadow-sky-500/20 disabled:opacity-50 transition-all cursor-pointer"
+                >
+                  {submitting ? 'Guardando en Libro 606...' : 'Guardar en Libro de Contabilidad (606)'}
+                </button>
+              )}
             </div>
           </div>
         </div>
