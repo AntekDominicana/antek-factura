@@ -11,8 +11,8 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 RUN apk add --no-cache libc6-compat openssl
 
-# Copiar manifiestos para aprovechar caché de dependencias
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Copiar manifiestos y configuración base de TypeScript
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 COPY packages/database/package.json ./packages/database/
 COPY packages/fiscal-engine/package.json ./packages/fiscal-engine/
 COPY apps/api/package.json ./apps/api/
@@ -29,6 +29,7 @@ COPY apps/api ./apps/api
 RUN cd packages/database && npx prisma generate
 
 # Compilar librerías y API
+RUN pnpm --filter @factura-ecf/database run build
 RUN pnpm --filter @factura-ecf/fiscal-engine run build
 RUN pnpm --filter @factura-ecf/api run build
 
