@@ -207,7 +207,10 @@ function PurchasesContent() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [decodingImage, setDecodingImage] = useState(false);
+  const [autoSaveQr, setAutoSaveQr] = useState(true);
   const detectingRef = useRef(false);
+  const lastScanTsRef = useRef(0);
+  const scanPassRef = useRef(0);
 
   // Formulario XML
   const [xmlText, setXmlText] = useState('');
@@ -261,6 +264,93 @@ function PurchasesContent() {
     async (rawQrText: string) => {
       setQrInput(rawQrText);
       setErrorMsg('');
+      setSuccessMsg('');
+
+      // 1. Parseo instantáneo local (<1ms) para mostrar el comprobante sin esperar red
+      const input = rawQrText.trim().replace(/&amp;/g, '&');
+      let localParsed: DgiiVerificationData | null = null;
+      try {
+        const urlParams = input.startsWith('http')
+          ? new URL(input).searchParams
+          : new URLSearchParams(input.includes('?') ? input.split('?')[1] : input);
+        const rncEmisor = getQueryParamCI(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']).replace(/\D/g, '');
+        const encf = getQueryParamCI(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
+        const montoTotal = parseFloat(
+          getQueryParamCI(urlParams, ['MontoTotal', 'Total', 'Monto']).replace(/,/g, '') || '0'
+        );
+        const totalItbis = parseFloat(
+          getQueryParamCI(urlParams, ['TotalITBIS', 'ITBIS', 'MontoITBIS']).replace(/,/g, '') || '0'
+        );
+        const fechaEmision = normalizeDgiiDateLocal(
+          getQueryParamCI(urlParams, ['FechaEmision', 'Fecha', 'FechaFirma'])
+        );
+
+        if (rncEmisor && encf) {
+          localParsed = {
+            rncEmisor,
+            razonSocialEmisor: `RNC ${rncEmisor}`,
+            rncComprador: tenant?.rnc || '',
+            razonSocialComprador: tenant?.razonSocial || 'Tu Empresa',
+            encf,
+            fechaEmision,
+            totalItbis: isNaN(totalItbis) ? 0 : totalItbis,
+            montoTotal: isNaN(montoTotal) ? 0 : montoTotal,
+            estado: 'Aceptado',
+          };
+          setPreviewData(localParsed);
+          setManualFields({
+            rncEmisor,
+            razonSocialEmisor: `RNC ${rncEmisor}`,
+            encf,
+            fechaEmision,
+            montoTotal: String(isNaN(montoTotal) ? 0 : montoTotal),
+            totalItbis: String(isNaN(totalItbis) ? 0 : totalItbis),
+          });
+        }
+      } catch {}
+
+      // 2. Si autoSaveQr está activo y tenemos datos válidos, guardar directo en Libro 606
+      if (autoSaveQr && localParsed) {
+        try {
+          setSubmitting(true);
+          const savedRes = await apiFetch<any>('/v1/purchases/register-qr', {
+            method: 'POST',
+            body: JSON.stringify({
+              qrRaw: rawQrText,
+              rncEmisor: localParsed.rncEmisor,
+              encf: localParsed.encf,
+              fechaEmision: localParsed.fechaEmision,
+              montoTotal: localParsed.montoTotal,
+              totalItbis: localParsed.totalItbis,
+              tipoGasto606: selectedGasto,
+            }),
+          });
+          if (savedRes?.verifiedDgii) {
+            setPreviewData(savedRes.verifiedDgii);
+            setManualFields({
+              rncEmisor: savedRes.verifiedDgii.rncEmisor || localParsed.rncEmisor,
+              razonSocialEmisor: savedRes.verifiedDgii.razonSocialEmisor || localParsed.razonSocialEmisor,
+              encf: savedRes.verifiedDgii.encf || localParsed.encf,
+              fechaEmision: savedRes.verifiedDgii.fechaEmision || localParsed.fechaEmision,
+              montoTotal: String(savedRes.verifiedDgii.montoTotal ?? localParsed.montoTotal),
+              totalItbis: String(savedRes.verifiedDgii.totalItbis ?? localParsed.totalItbis),
+            });
+          }
+          setSuccessMsg(
+            `✓ Factura ${savedRes?.purchase?.encf || localParsed.encf} leída y guardada en tu Libro de Contabilidad (606).`
+          );
+          await loadPurchases();
+        } catch (saveErr: any) {
+          setErrorMsg(
+            saveErr?.message || 'Se leyó el QR, pero no se pudo guardar automáticamente. Revisa tu sesión e intenta guardar.'
+          );
+        } finally {
+          setSubmitting(false);
+        }
+        return;
+      }
+
+      // 3. Enriquecimiento en servidor si no se guardó automáticamente
       try {
         const res = await apiFetch<any>('/v1/purchases/parse-qr', {
           method: 'POST',
@@ -286,53 +376,16 @@ function PurchasesContent() {
           totalItbis: String(res.totalItbis ?? ''),
         });
       } catch (err: any) {
-        // Fallback de parseo local si la URL tiene parámetros estándar DGII (ConsultaTimbre / ConsultaTimbreFC)
-        try {
-          const input = rawQrText.trim().replace(/&amp;/g, '&');
-          const urlParams = input.startsWith('http')
-            ? new URL(input).searchParams
-            : new URLSearchParams(input.includes('?') ? input.split('?')[1] : input);
-          const rncEmisor = getQueryParamCI(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']).replace(/\D/g, '');
-          const encf = getQueryParamCI(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
-          const montoTotal = parseFloat(
-            getQueryParamCI(urlParams, ['MontoTotal', 'Total', 'Monto']).replace(/,/g, '') || '0'
+        if (!localParsed) {
+          setErrorMsg(
+            err?.message || 'El QR leído no contiene parámetros DGII válidos (RncEmisor y ENCF).'
           );
-          const totalItbis = parseFloat(
-            getQueryParamCI(urlParams, ['TotalITBIS', 'ITBIS', 'MontoITBIS']).replace(/,/g, '') || '0'
-          );
-          const fechaEmision = normalizeDgiiDateLocal(
-            getQueryParamCI(urlParams, ['FechaEmision', 'Fecha', 'FechaFirma'])
-          );
-
-          if (rncEmisor && encf) {
-            setPreviewData({
-              rncEmisor,
-              razonSocialEmisor: `RNC ${rncEmisor}`,
-              rncComprador: tenant?.rnc || '',
-              razonSocialComprador: tenant?.razonSocial || 'Tu Empresa',
-              encf,
-              fechaEmision,
-              totalItbis: isNaN(totalItbis) ? 0 : totalItbis,
-              montoTotal: isNaN(montoTotal) ? 0 : montoTotal,
-              estado: 'Aceptado',
-            });
-            setManualFields({
-              rncEmisor,
-              razonSocialEmisor: `RNC ${rncEmisor}`,
-              encf,
-              fechaEmision,
-              montoTotal: String(isNaN(montoTotal) ? 0 : montoTotal),
-              totalItbis: String(isNaN(totalItbis) ? 0 : totalItbis),
-            });
-          } else {
-            setErrorMsg(err?.message || 'El QR leído no contiene parámetros DGII válidos (RncEmisor y ENCF).');
-          }
-        } catch {
-          setErrorMsg(err?.message || 'Formato de código QR / URL de DGII inválido.');
+        } else if (err?.status === 401) {
+          setErrorMsg(err.message);
         }
       }
     },
-    [tenant?.rnc, tenant?.razonSocial]
+    [tenant?.rnc, tenant?.razonSocial, autoSaveQr, selectedGasto]
   );
 
   const startCamera = useCallback(async () => {
@@ -346,11 +399,24 @@ function PurchasesContent() {
     try {
       stopCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
         audio: false,
       });
       streamRef.current = stream;
       setCameraActive(true);
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack?.applyConstraints) {
+        try {
+          await videoTrack.applyConstraints({
+            advanced: [{ focusMode: 'continuous' } as any],
+          });
+        } catch {}
+      }
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -367,23 +433,15 @@ function PurchasesContent() {
         const canvas = canvasRef.current;
         if (!video || !canvas || !streamRef.current) return;
 
-        if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-              inversionAttempts: 'attemptBoth',
-            });
-            if (code?.data) {
-              stopCamera();
-              parseDecodedQr(code.data);
-              return;
-            }
-          }
+        const now = performance.now();
+        if (
+          video.readyState === video.HAVE_ENOUGH_DATA &&
+          video.videoWidth > 0 &&
+          now - lastScanTsRef.current >= 85
+        ) {
+          lastScanTsRef.current = now;
 
+          // Motor 1: BarcodeDetector nativo (acelerado por hardware)
           if (barcodeDetector && !detectingRef.current) {
             detectingRef.current = true;
             barcodeDetector
@@ -398,6 +456,38 @@ function PurchasesContent() {
               .finally(() => {
                 detectingRef.current = false;
               });
+          }
+
+          // Motor 2: jsQR rápido alternando recorte central (480px) y cuadro completo (640px)
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          const useCenterCrop = scanPassRef.current % 2 === 0;
+          scanPassRef.current += 1;
+
+          const sx = useCenterCrop ? Math.floor(vw * 0.175) : 0;
+          const sy = useCenterCrop ? Math.floor(vh * 0.175) : 0;
+          const sw = useCenterCrop ? Math.floor(vw * 0.65) : vw;
+          const sh = useCenterCrop ? Math.floor(vh * 0.65) : vh;
+
+          const maxDim = useCenterCrop ? 480 : 640;
+          const scale = Math.min(1, maxDim / Math.max(sw, sh));
+          const dw = Math.max(1, Math.round(sw * scale));
+          const dh = Math.max(1, Math.round(sh * scale));
+
+          canvas.width = dw;
+          canvas.height = dh;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
+            const imageData = ctx.getImageData(0, 0, dw, dh);
+            const code = jsQR(imageData.data, dw, dh, {
+              inversionAttempts: 'attemptBoth',
+            });
+            if (code?.data) {
+              stopCamera();
+              parseDecodedQr(code.data);
+              return;
+            }
           }
         }
         rafRef.current = requestAnimationFrame(scanFrame);
@@ -1160,11 +1250,22 @@ function PurchasesContent() {
                 </div>
               )}
 
-              {/* Selector de Clasificación 606 */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Clasificación Contable Formato 606
-                </label>
+              {/* Selector de Clasificación 606 + Guardado Automático */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Clasificación Contable Formato 606
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-sky-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={autoSaveQr}
+                      onChange={(e) => setAutoSaveQr(e.target.checked)}
+                      className="rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                    />
+                    <span>Guardar automático al leer QR</span>
+                  </label>
+                </div>
                 <select
                   value={selectedGasto}
                   onChange={(e) => setSelectedGasto(e.target.value)}
@@ -1179,9 +1280,19 @@ function PurchasesContent() {
               </div>
 
               {errorMsg && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  {errorMsg}
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{errorMsg}</span>
+                  </div>
+                  {(errorMsg.toLowerCase().includes('sesión') || errorMsg.toLowerCase().includes('autorizado')) && (
+                    <Link
+                      href="/login?redirect=/app/purchases?scan=1"
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold text-[11px]"
+                    >
+                      Iniciar Sesión
+                    </Link>
+                  )}
                 </div>
               )}
               {successMsg && (

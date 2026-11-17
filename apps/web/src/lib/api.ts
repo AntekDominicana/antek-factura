@@ -86,8 +86,17 @@ export async function apiFetch<T = any>(path: string, options?: RequestInit): Pr
   const data = contentType.includes('application/json') ? await res.json() : await res.text();
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('antek_token');
+      } catch {}
+    }
     const err: any = new Error(
-      typeof data === 'object' && data?.message ? data.message : `HTTP Error ${res.status}`
+      res.status === 401
+        ? 'Tu sesión ha expirado o no es válida. Por favor vuelve a iniciar sesión.'
+        : typeof data === 'object' && data?.message
+        ? data.message
+        : `HTTP Error ${res.status}`
     );
     err.status = res.status;
     err.payload = data;
