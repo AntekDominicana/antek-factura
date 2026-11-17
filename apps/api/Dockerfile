@@ -8,7 +8,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Instalar pnpm y herramientas básicas
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 RUN apk add --no-cache libc6-compat openssl
 
 # Copiar manifiestos para aprovechar caché de dependencias
@@ -43,7 +43,7 @@ ENV NODE_ENV=production
 ENV PORT=4000
 
 RUN apk add --no-cache curl openssl
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 # Usuario no privilegiado para seguridad
 USER node
