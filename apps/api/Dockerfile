@@ -3,7 +3,7 @@
 # Producción Multi-Stage Hardened
 # ==========================================
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ RUN pnpm --filter @factura-ecf/api run build
 # ==========================================
 # Runner de Producción (Minimal & Secure)
 # ==========================================
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
