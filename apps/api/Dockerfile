@@ -11,8 +11,8 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 RUN apk add --no-cache libc6-compat openssl
 
-# Copiar manifiestos y configuración base de TypeScript
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
+# Copiar manifiestos, configuración base de TypeScript y configuración pnpm
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json .npmrc ./
 COPY packages/database/package.json ./packages/database/
 COPY packages/fiscal-engine/package.json ./packages/fiscal-engine/
 COPY apps/api/package.json ./apps/api/
@@ -42,6 +42,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=4000
+ENV NODE_PATH=/app/node_modules:/app/apps/api/node_modules
 
 RUN apk add --no-cache curl openssl
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
@@ -49,11 +50,8 @@ RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 # Usuario no privilegiado para seguridad
 USER node
 
-# Copiar build y node_modules de producción
-COPY --chown=node:node --from=builder /app/node_modules ./node_modules
-COPY --chown=node:node --from=builder /app/packages ./packages
-COPY --chown=node:node --from=builder /app/apps/api/dist ./apps/api/dist
-COPY --chown=node:node --from=builder /app/apps/api/package.json ./apps/api/package.json
+# Copiar workspace completo compilado con sus dependencias, librerías y symlinks
+COPY --chown=node:node --from=builder /app ./
 
 EXPOSE 4000
 
