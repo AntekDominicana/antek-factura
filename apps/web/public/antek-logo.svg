@@ -1,0 +1,56 @@
+<svg width="400" height="90" viewBox="0 0 400 90" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="antekLeft" x1="15" y1="80" x2="45" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="50%" stop-color="#0ea5e9" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+    <linearGradient id="antekRight" x1="45" y1="10" x2="75" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#0369a1" />
+    </linearGradient>
+    <linearGradient id="antekCross" x1="30" y1="50" x2="80" y2="68" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00d2ff" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <linearGradient id="antekGlow" x1="45" y1="8" x2="18" y2="75" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9" />
+      <stop offset="40%" stop-color="#7dd3fc" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="textFactura" x1="180" y1="20" x2="340" y2="55" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+  </defs>
+
+  <!-- Sombra 3D -->
+  <ellipse cx="45" cy="84" rx="34" ry="4" fill="#0284c7" fill-opacity="0.3" />
+
+  <!-- Emblema 3D "A" ANTEK -->
+  <g id="EmblemA">
+    <path d="M 45 10 L 16 80 L 32 80 L 45 48 L 58 80 L 74 80 L 45 10 Z" fill="url(#antekLeft)" />
+    <path d="M 45 10 L 58 80 L 76 80 L 45 10 Z" fill="url(#antekRight)" />
+    <path d="M 33 54 L 68 54 L 60 68 L 28 68 Z" fill="url(#antekCross)" />
+    <path d="M 45 10 L 16 80 L 20 80 L 45 14 L 70 80 L 74 80 L 45 10 Z" fill="url(#antekGlow)" opacity="0.8" />
+  </g>
+
+  <!-- Tipografía ANTEK -->
+  <text x="96" y="52" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="34" letter-spacing="4" fill="#0f172a">
+    ANTEK
+  </text>
+
+  <!-- Tipografía FACTURA -->
+  <text x="254" y="52" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="34" letter-spacing="2" fill="url(#textFactura)">
+    FACTURA
+  </text>
+
+  <!-- Subtítulo e-CF y dominio -->
+  <text x="98" y="74" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-weight="700" font-size="11" letter-spacing="2" fill="#0284c7">
+    FACTURACIÓN ELECTRÓNICA DGII
+  </text>
+  <text x="296" y="74" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-weight="600" font-size="11" letter-spacing="1" fill="#64748b">
+    • antek.com.do
+  </text>
+</svg>

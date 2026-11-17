@@ -1,0 +1,178 @@
+services:
+  # ==========================================
+  # 1. Base de Datos Relacional PostgreSQL 16
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: antek_factura_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ecf_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecf_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-factura_ecf_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ecf_user} -d ${POSTGRES_DB:-factura_ecf_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 2. Caché y Encolamiento Redis 7 (AOF)
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: antek_factura_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-}"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 3. PgHero - Rendimiento & Queries SQL
+  # ==========================================
+  pghero:
+    image: ankane/pghero:latest
+    container_name: antek_factura_pghero
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-ecf_user}:${POSTGRES_PASSWORD:-ecf_secure_password}@postgres:5432/${POSTGRES_DB:-factura_ecf_db}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 4. Uptime Kuma - Monitoreo de Disponibilidad
+  # ==========================================
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: antek_factura_uptime_kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 5. Backup Automatizado (Restic + AES-256)
+  # Respalda cada 6 horas la BD y XMLs fiscales
+  # ==========================================
+  backup-restic:
+    image: offen/docker-volume-backup:latest
+    container_name: antek_factura_backup
+    restart: unless-stopped
+    environment:
+      BACKUP_CRON_EXPRESSION: "0 */6 * * *"
+      BACKUP_FILENAME: "antek_ecf_backup_%Y-%m-%d_%H-%M-%S.tar.gz"
+      BACKUP_PRUNING_PREFIX: "antek_ecf_backup_"
+      BACKUP_RETENTION_DAYS: "30"
+      # Cifrado de respaldo en reposo con AES-256
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-antek-secure-aes256-backup-key-rd}
+      # Integración lista para S3 / Cloudflare R2:
+      # AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME}
+      # AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # AWS_ENDPOINT: ${AWS_ENDPOINT}
+    volumes:
+      - postgres_data:/backup/postgres_data:ro
+      - certs_data:/backup/certs_data:ro
+      - xml_storage:/backup/xml_storage:ro
+      - backups_local:/archive
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 6. Backend API (NestJS - e-CF Engine)
+  # ==========================================
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: antek_factura_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-ecf_user}:${POSTGRES_PASSWORD:-ecf_secure_password}@postgres:5432/${POSTGRES_DB:-factura_ecf_db}
+      REDIS_URL: redis://postgres:6379
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    ports:
+      - "4000:4000"
+    volumes:
+      - certs_data:/app/certs
+      - xml_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - antek_network
+
+  # ==========================================
+  # 7. Frontend Web (Next.js 15 Standalone)
+  # ==========================================
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: antek_factura_web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - antek_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  uptime_kuma_data:
+  certs_data:
+  xml_storage:
+  backups_local:
+
+networks:
+  antek_network:
+    driver: bridge

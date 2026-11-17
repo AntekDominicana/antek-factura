@@ -1,0 +1,622 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum FiscalProviderType {
+  GTI
+  DGII_DIRECT
+  SIMULATOR
+}
+
+enum FiscalProviderFallback {
+  NONE
+  GTI
+  SIMULATOR
+}
+
+enum SystemEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  BILLER
+  ACCOUNTANT
+}
+
+enum CommercialApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELED
+}
+
+enum SubscriptionPaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  TEAM_INVITE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  QUEUED
+  QUEUED_CONTINGENCY
+  PROCESSING
+  ACCEPTED
+  CONDITIONAL
+  REJECTED
+  ERROR
+  CONTINGENCY_PENDING
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model Tenant {
+  id                      String                  @id @default(uuid())
+  rnc                     String                  @unique // 9 (empresas) u 11 (físicas) dígitos
+  razonSocial             String
+  nombreComercial         String?
+  direccion               String
+  provinciaCodigo         String?                 // e.g. "10000" Distrito Nacional
+  municipioCodigo         String?                 // e.g. "10100" Sto Dgo de Guzmán
+  telefono                String?
+  correo                  String
+  actividadEconomica      String?
+  
+  // Proveedor fiscal dinámico con fallback
+  fiscalProvider          FiscalProviderType      @default(GTI)
+  fiscalProviderFallback  FiscalProviderFallback  @default(NONE)
+  environment             SystemEnvironment       @default(SANDBOX)
+  
+  // Credenciales cifradas con AES-256-GCM
+  gtiUsuarioEnc           String?
+  gtiClaveEnc             String?
+  
+  // Certificado digital .p12 para DGII / firma digital
+  certificadoP12Enc       String?
+  certificadoPassEnc      String?
+  previousCertEnc         String?
+  certExpiresAt           DateTime?
+  
+  // Modo de contingencia ante fallos externos
+  contingencyMode         Boolean                 @default(false)
+  contingencySince        DateTime?
+
+  // Consentimiento Legal, Recopilación de Datos y Comunicaciones (Ley 172-13)
+  dataCollectionConsent   Boolean                 @default(false)
+  marketingPromotionsOptIn Boolean                @default(false)
+  termsAcceptedVersion    String?
+  termsAcceptedAt         DateTime?
+  consentSignatureHash    String?
+  
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+
+  users                   TenantUser[]
+  branches                Branch[]
+  subscription            Subscription?
+  sequences               EcfSequence[]
+  customers               Customer[]
+  products                Product[]
+  invoices                Invoice[]
+  fiscalEventLogs         FiscalEventLog[]
+  apiKeys                 ApiKey[]
+  webhooks                Webhook[]
+  paymentLinks            PaymentLinkTransaction[]
+  receivedPurchases       ReceivedPurchase[]
+
+  @@index([rnc])
+}
+
+model TenantUser {
+  id                   String              @id @default(uuid())
+  tenantId             String
+  email                String
+  passwordHash         String
+  fullName             String
+  role                 UserRole            @default(ADMIN)
+  isActive             Boolean             @default(true)
+  emailVerified        Boolean             @default(false)
+  twoFactorEnabled     Boolean             @default(false)
+  twoFactorSecretEnc   String?
+  failedLoginAttempts  Int                 @default(0)
+  lockedUntil          DateTime?
+  lastLoginAt          DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  tenant               Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions             UserSession[]
+  tokens               VerificationToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model UserSession {
+  id               String      @id @default(uuid())
+  userId           String
+  refreshTokenHash String      @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime    @default(now())
+
+  user             TenantUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+}
+
+model VerificationToken {
+  id        String                @id @default(uuid())
+  userId    String
+  tokenHash String                @unique
+  type      VerificationTokenType
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  user      TenantUser            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Branch {
+  id             String    @id @default(uuid())
+  tenantId       String
+  numeroSucursal Int       // Id de sucursal asignado
+  nombre         String
+  direccion      String
+  telefono       String?
+  isDefault      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices       Invoice[]
+
+  @@unique([tenantId, numeroSucursal])
+  @@index([tenantId])
+}
+
+model Plan {
+  id                  String         @id @default(uuid())
+  code                String         @unique // BASIC, MEDIUM, PRO
+  name                String
+  description         String?
+  priceDop            Decimal        @db.Decimal(12, 2)
+  priceUsd            Decimal        @db.Decimal(12, 2)
+  monthlyInvoiceLimit Int            // 100, 600, 3000
+  maxUsers            Int            @default(1)
+  maxBranches         Int            @default(1)
+  allowedEcfTypes     Int[]          // [31, 32] or [31, 32, 33, 34, 44, 45], etc.
+  apiAccess           Boolean        @default(false)
+  isActive            Boolean        @default(true)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  subscriptions       Subscription[]
+}
+
+model Subscription {
+  id                        String             @id @default(uuid())
+  tenantId                  String             @unique
+  planId                    String
+  status                    SubscriptionStatus @default(TRIAL)
+  currentPeriodStart        DateTime           @default(now())
+  currentPeriodEnd          DateTime
+  gracePeriodEndsAt         DateTime?
+  invoicesUsedCurrentPeriod  Int                @default(0)
+  lastPaymentLinkUrl        String?
+  externalCustomerId        String?
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+
+  tenant                    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan                      Plan               @relation(fields: [planId], references: [id])
+  payments                  SubscriptionPayment[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model SubscriptionPayment {
+  id                   String                    @id @default(uuid())
+  subscriptionId       String
+  amount               Decimal                   @db.Decimal(12, 2)
+  currency             String                    @default("DOP")
+  gateway              String                    // CARDNET, AZUL, STRIPE, MANUAL
+  gatewayTransactionId String?                   @unique
+  status               SubscriptionPaymentStatus @default(PENDING)
+  checkoutUrl          String?
+  paidAt               DateTime?
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  subscription         Subscription              @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, status])
+}
+
+model EcfSequence {
+  id                  String            @id @default(uuid())
+  tenantId            String
+  environment         SystemEnvironment @default(SANDBOX)
+  tipoEcf             Int               // 31, 32, 33, 34, 41, 43, 44, 45, 46, 47
+  idRangoSecuencia    Int
+  consecutivoDesde    Int
+  consecutivoHasta    Int
+  ultimoConsecutivo   Int               @default(0)
+  fechaVencimiento    DateTime?
+  isActive            Boolean           @default(true)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, environment, tipoEcf, idRangoSecuencia])
+  @@index([tenantId, tipoEcf])
+}
+
+model Customer {
+  id                      String    @id @default(uuid())
+  tenantId                String
+  rnc                     String?
+  razonSocial             String
+  tipoIdentificacion      Int?      // 1: RNC, 2: Cédula, 3: Pasaporte/Extranjero
+  identificadorExtranjero String?
+  correo                  String?
+  telefono                String?
+  direccion               String?
+  provinciaCodigo         String?
+  municipioCodigo         String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices                Invoice[]
+
+  @@index([tenantId, rnc])
+}
+
+model Product {
+  id                     String    @id @default(uuid())
+  tenantId               String
+  codigo                 String
+  nombre                 String
+  descripcion            String?
+  precioUnitario         Decimal   @db.Decimal(18, 4)
+  indicadorBienServicio  Int       @default(1) // 1: Bien, 2: Servicio
+  indicadorFacturacion   Int       @default(1) // 0: No facturable, 1: 18%, 2: 16%, 3: 0%, 4: Exento
+  unidadMedida           Int       @default(43) // 43: Unidad
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, codigo])
+  @@index([tenantId])
+}
+
+model Invoice {
+  id                          String             @id @default(uuid())
+  tenantId                    String
+  branchId                    String?
+  customerId                  String?
+  environment                 SystemEnvironment  @default(SANDBOX) // Heredado del ApiKey / Sesión
+  idempotencyKey              String?            // Clave de idempotencia única por tenant
+  
+  // Datos Principales e-CF
+  tipoEcf                     Int                // 31, 32, 33, etc.
+  encf                        String?            // e.g. E310000000001 (13 chars)
+  externalDocId               String?            // NumeroFacturaInternaEmisor (ERP id)
+  status                      InvoiceStatus      @default(DRAFT)
+  
+  // Encabezado Fiscal
+  indicadorMontoGravado       Int                @default(0) // 0: sin ITBIS incluido, 1: con ITBIS incluido
+  tipoIngresos                String?            @default("01")
+  tipoPago                    Int                @default(1) // 1: Contado, 2: Crédito, 3: Gratuito
+  fechaEmision                DateTime           @default(now())
+  fechaVencimientoSecuencia   DateTime?
+  fechaLimitePago             DateTime?
+  terminoPago                 String?
+
+  // Receptor
+  rncComprador                String?
+  razonSocialComprador        String?
+  identificadorExtranjero     String?
+
+  // Totales Calculados
+  montoGravadoTotal           Decimal?           @db.Decimal(18, 2)
+  montoGravadoI1              Decimal?           @db.Decimal(18, 2)
+  montoGravadoI2              Decimal?           @db.Decimal(18, 2)
+  montoGravadoI3              Decimal?           @db.Decimal(18, 2)
+  itbis1                      Decimal?           @db.Decimal(5, 2)
+  itbis2                      Decimal?           @db.Decimal(5, 2)
+  itbis3                      Decimal?           @db.Decimal(5, 2)
+  totalItbis                  Decimal?           @db.Decimal(18, 2)
+  totalItbis1                 Decimal?           @db.Decimal(18, 2)
+  totalItbis2                 Decimal?           @db.Decimal(18, 2)
+  totalItbis3                 Decimal?           @db.Decimal(18, 2)
+  montoExento                 Decimal?           @db.Decimal(18, 2)
+  montoImpuestoAdicional      Decimal?           @db.Decimal(18, 2)
+  totalItbisRetenido          Decimal?           @db.Decimal(18, 2)
+  totalIsrRetencion           Decimal?           @db.Decimal(18, 2)
+  montoTotal                  Decimal            @db.Decimal(18, 2)
+
+  // Moneda extranjera
+  tipoMoneda                  String?
+  tipoCambio                  Decimal?           @db.Decimal(12, 4)
+  montoTotalOtraMoneda        Decimal?           @db.Decimal(18, 2)
+
+  // Metadatos de Respuesta GTI / DGII
+  externalIdGti               String?            // IdDocumento de GTI
+  urlQr                       String?
+  codigoSeguridad             String?            // 6 caracteres de hash
+  fechaHoraFirma              DateTime?
+  
+  // Retención legal (5+ años) e inmutabilidad
+  xmlStorageKey               String?            // S3/R2 storage key
+  pdfStorageKey               String?
+  xmlHash                     String?            // SHA-256 del XML emitido
+
+  // Errores y Respuesta
+  errorCode                   String?
+  errorMessage                String?
+  gtiRawResponse              Json?
+
+  createdAt                   DateTime           @default(now())
+  updatedAt                   DateTime           @updatedAt
+
+  tenant                      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch                      Branch?            @relation(fields: [branchId], references: [id])
+  customer                    Customer?          @relation(fields: [customerId], references: [id])
+  items                       InvoiceItem[]
+  references                  InvoiceReference[]
+  fiscalEventLogs             FiscalEventLog[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, environment, encf])
+  @@index([tenantId, status])
+  @@index([tenantId, externalDocId])
+  @@index([createdAt])
+}
+
+model InvoiceItem {
+  id                          String    @id @default(uuid())
+  invoiceId                   String
+  numeroLinea                 Int
+  indicadorFacturacion        Int       // 0, 1, 2, 3, 4
+  indicadorBienServicio       Int       // 1: Bien, 2: Servicio
+  nombreItem                  String
+  descripcionItem             String?
+  cantidadItem                Decimal   @db.Decimal(18, 2)
+  precioUnitarioItem          Decimal   @db.Decimal(18, 4)
+  unidadMedida                Int       @default(43)
+  descuentoMonto              Decimal   @default(0) @db.Decimal(18, 2)
+  recargoMonto                Decimal   @default(0) @db.Decimal(18, 2)
+  montoItem                   Decimal   @db.Decimal(18, 2)
+  
+  // Retenciones por ítem
+  montoItbisRetenido          Decimal?  @db.Decimal(18, 2)
+  montoIsrRetenido            Decimal?  @db.Decimal(18, 2)
+  indicadorAgenteRetencion    Int?      // 1: R, 2: P
+
+  // Otra Moneda
+  precioOtraMoneda            Decimal?  @db.Decimal(18, 4)
+  montoItemOtraMoneda         Decimal?  @db.Decimal(18, 2)
+
+  invoice                     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model InvoiceReference {
+  id                   String    @id @default(uuid())
+  invoiceId            String
+  numeroLinea          Int       @default(1)
+  ncfModificado        String    // NCF del documento original (11, 13 o 19 caracteres)
+  fechaNcfModificado   DateTime  // Fecha del NCF original
+  codigoModificacion   Int       // 1: Anula, 2: Corrige texto, 3: Corrige montos, 4: Contingencia, 5: Ref
+  razonModificacion    String?
+  indicadorNotaCredito Int?      // 0: <= 30 días, 1: > 30 días
+
+  invoice              Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+// Registro inmutable de eventos fiscales (Append-Only)
+model FiscalEventLog {
+  id              String             @id @default(uuid())
+  tenantId        String
+  invoiceId       String?
+  provider        FiscalProviderType
+  eventType       String             // 'TOKEN_REQUEST', 'EMISSION', 'STATUS_CHECK', 'SEQUENCE_SYNC', 'PDF_FETCH'
+  httpStatus      Int?
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?
+  createdAt       DateTime           @default(now())
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice         Invoice?           @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([invoiceId])
+}
+
+model ApiKey {
+  id                String            @id @default(uuid())
+  tenantId          String
+  name              String
+  keyPrefix         String            // primeros 8 caracteres (ej. 'ecf_live_')
+  keyHash           String            @unique // SHA-256 de la API Key completa
+  encryptedKeyVault String?           // AES-256-GCM cifrado (nunca expuesto en respuestas)
+  environment       SystemEnvironment @default(SANDBOX)
+  isActive          Boolean           @default(true)
+  lastUsedAt        DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model PaymentLinkTransaction {
+  id              String    @id @default(uuid())
+  tenantId        String
+  planSlug        String
+  gateway         String
+  amountDop       Decimal   @db.Decimal(12, 2)
+  status          String    @default("PENDING_PAYMENT")
+  serverSignature String
+  verifiedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+}
+
+model Webhook {
+  id          String            @id @default(uuid())
+  tenantId    String
+  url         String
+  secret      String            // Secret para firma HMAC-SHA256
+  events      String[]          // ["invoice.accepted", "invoice.rejected", "invoice.failed", ...]
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries  WebhookDelivery[]
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id           String                @id @default(uuid())
+  webhookId    String
+  event        String
+  payload      Json
+  signature    String
+  status       WebhookDeliveryStatus @default(PENDING)
+  attempts     Int                   @default(0)
+  maxAttempts  Int                   @default(5)
+  nextRetryAt  DateTime?
+  responseCode Int?
+  responseBody String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  webhook      Webhook               @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, status])
+}
+
+// Catálogos Oficiales de la DGII
+model CatalogProvince {
+  codigo String @id
+  nombre String
+
+  municipalities CatalogMunicipality[]
+}
+
+model CatalogMunicipality {
+  codigo          String          @id
+  provinciaCodigo String
+  nombre          String
+
+  province        CatalogProvince @relation(fields: [provinciaCodigo], references: [codigo])
+}
+
+model CatalogUnitOfMeasure {
+  codigo      Int    @id
+  descripcion String
+}
+
+model CatalogAdditionalTax {
+  codigo       String  @id // e.g. "001", "002"
+  tipoImpuesto String
+  abreviatura  String
+  descripcion  String
+  tasa         Decimal @db.Decimal(10, 2)
+}
+
+model CatalogCurrency {
+  codigo      String @id // USD, EUR, etc.
+  descripcion String
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  tenantId    String?
+  userId      String?
+  action      String   // SEQUENCE_CREATED, CERT_UPDATED, API_KEY_CREATED, INVOICE_EMITTED, SUBSCRIPTION_UPDATED, MANUAL_PAYMENT_ACTIVATED
+  entity      String   // Tenant, Invoice, EcfSequence, Subscription, ApiKey, User
+  entityId    String?
+  oldPayload  Json?
+  newPayload  Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([action, createdAt])
+}
+
+model ReceivedPurchase {
+  id                    String                   @id @default(uuid())
+  tenantId              String
+  rncEmisor             String
+  razonSocialEmisor     String
+  encf                  String                   // e-NCF del emisor (ej. E310004048543)
+  tipoEcf               Int                      // 31, 33, 34, 44, 45, etc.
+  fechaEmision          String                   // DD-MM-YYYY
+  montoTotal            Decimal                  @db.Decimal(12, 2)
+  totalItbis            Decimal                  @db.Decimal(12, 2)
+  tipoGasto606          String                   @default("02") // 01 Gastos personal, 02 Trabajos/servicios, etc.
+  xmlContent            String?                  @db.Text
+  xmlHash               String?
+  commercialStatus      CommercialApprovalStatus @default(PENDING)
+  commercialComment     String?
+  commercialApprovedAt  DateTime?
+  commercialApprovedBy  String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  tenant                Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, rncEmisor, encf])
+  @@index([tenantId, commercialStatus])
+}

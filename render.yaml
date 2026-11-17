@@ -1,0 +1,50 @@
+services:
+  # ==============================================================================
+  # API Backend NestJS - Facturación Electrónica DGII (Ley 32-23)
+  # ==============================================================================
+  - type: web
+    name: antek-factura-api
+    env: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    healthCheckPath: /v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        sync: false # Configurar con la URL de Supabase PostgreSQL
+      - key: DIRECT_URL
+        sync: false # Configurar con la conexión directa de Supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: ecf-documents
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: antek-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_MASTER_KEY
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://antek-factura.vercel.app
+      - key: NEXT_PUBLIC_API_URL
+        value: https://antek-factura-api.onrender.com
+
+  # ==============================================================================
+  # Redis 7 Gestionado para Colas BullMQ, Caché y Control de Rango e-NCF
+  # ==============================================================================
+  - type: redis
+    name: antek-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # Solo accesible internamente por la API

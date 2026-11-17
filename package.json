@@ -1,0 +1,37 @@
+{
+  "name": "factura-ecf-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SaaS Multi-tenant de Facturación Electrónica (e-CF) República Dominicana (Ley 32-23)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm --recursive run build",
+    "dev": "pnpm --recursive --parallel run dev",
+    "test": "pnpm --recursive run test",
+    "lint": "pnpm --recursive run lint",
+    "db:generate": "pnpm --filter @factura-ecf/database db:generate",
+    "db:migrate": "pnpm --filter @factura-ecf/database db:migrate",
+    "db:seed": "pnpm --filter @factura-ecf/database db:seed",
+    "audit:owner": "node scripts/owner-audit.mjs",
+    "build:web": "pnpm --filter @factura-ecf/fiscal-engine build && pnpm --filter @factura-ecf/web build"
+  },
+  "devDependencies": {
+    "next": "^15.1.8",
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "@scarf/scarf",
+      "bcrypt",
+      "msgpackr-extract",
+      "prisma",
+      "sharp"
+    ]
+  }
+}
