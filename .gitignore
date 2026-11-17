@@ -23,8 +23,8 @@ build/
 *.pem
 *.key
 *.crt
-certs/
-storage/
+/certs/
+/storage/
 
 # Vercel y Turbo
 .vercel
