@@ -132,7 +132,7 @@ export default function CompanySettingsPage() {
         <div className="flex items-center justify-between">
           <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
             <Printer className="w-4 h-4 text-sky-600" />
-            <span>Logo de Tu Empresa (ej. Juan Pérez SRL) e Impresión</span>
+            <span>Logo de Tu Empresa e Impresión</span>
           </div>
           {form.logoBase64 && (
             <button

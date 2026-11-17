@@ -396,7 +396,7 @@ export class AuthService {
         rnc: user.tenant.rnc,
         environment: user.tenant.environment,
       },
-      { expiresIn: '15m' }
+      { expiresIn: '7d' }
     );
 
     const newRawRefreshToken = crypto.randomBytes(40).toString('hex');

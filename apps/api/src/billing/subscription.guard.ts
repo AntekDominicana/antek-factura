@@ -11,10 +11,10 @@ import { BillingService } from './billing.service';
 export class SubscriptionGuard implements CanActivate {
   constructor(private readonly billingService: BillingService) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const apiKey = request.headers['x-api-key'] || request.headers['authorization'];
-    const isApiKeyRequest = Boolean(apiKey);
+    const isApiKeyRequest =
+      request.user?.authType === 'API_KEY' || Boolean(request.headers['x-api-key']);
     // Extracción inviolable: solo desde el contexto autenticado, nunca de headers no seguros
     const tenantId = request.user?.tenantId || request.tenantId || 'tenant-principal';
 
@@ -34,11 +34,11 @@ export class SubscriptionGuard implements CanActivate {
       tipoEcf = 31;
     }
 
-    // Ejecuta las 4 reglas del negocio
-    this.billingService.checkEmissionAllowed(tenantId, tipoEcf, isApiKeyRequest);
+    // Ejecuta las 4 reglas del negocio contra Supabase PostgreSQL
+    await this.billingService.checkEmissionAllowed(tenantId, tipoEcf, isApiKeyRequest);
 
     // Guardar referencia en el request para uso posterior
-    request.subscription = this.billingService.getSubscription(tenantId);
+    request.subscription = await this.billingService.getSubscription(tenantId);
 
     return true;
   }

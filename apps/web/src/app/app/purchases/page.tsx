@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import jsQR from 'jsqr';
 import {
   QrCode,
@@ -68,7 +69,106 @@ const TIPO_GASTO_606_OPTIONS: Record<string, string> = {
 
 type ScanMode = 'camera' | 'image' | 'manual';
 
-export default function PurchasesPage() {
+function normalizeDgiiDateLocal(rawDate?: string): string {
+  const today = new Date().toISOString().split('T')[0];
+  if (!rawDate) return today;
+  const cleaned = decodeURIComponent(rawDate.trim());
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
+  const dmy = cleaned.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  return cleaned;
+}
+
+function getQueryParamCI(params: URLSearchParams, candidates: string[]): string {
+  const normalized = candidates.map((c) => c.toLowerCase().replace(/[_-]/g, ''));
+  for (const [k, v] of params.entries()) {
+    const norm = k.toLowerCase().replace(/[_-]/g, '');
+    if (normalized.includes(norm) && v) return v.trim();
+  }
+  return '';
+}
+
+function tryJsQrWithContrast(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): string | null {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const direct = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' });
+  if (direct?.data) return direct.data;
+
+  // Pase de alto contraste para recibos térmicos tenues
+  const data = imageData.data;
+  let sumLum = 0;
+  const totalPixels = width * height;
+  for (let i = 0; i < data.length; i += 4) {
+    sumLum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  }
+  const threshold = Math.max(60, Math.min(200, (sumLum / Math.max(1, totalPixels)) * 0.88));
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    const bin = lum < threshold ? 0 : 255;
+    data[i] = bin;
+    data[i + 1] = bin;
+    data[i + 2] = bin;
+  }
+  const contrasted = jsQR(data, width, height, { inversionAttempts: 'attemptBoth' });
+  return contrasted?.data || null;
+}
+
+async function decodeQrFromImageElement(img: HTMLImageElement): Promise<string | null> {
+  // 1. Intentar BarcodeDetector nativo del navegador (móviles Android / Chrome / Edge)
+  if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+    try {
+      const Detector = (window as any).BarcodeDetector;
+      const detector = new Detector({ formats: ['qr_code'] });
+      const results = await detector.detect(img);
+      if (results?.length && results[0]?.rawValue) {
+        return String(results[0].rawValue);
+      }
+    } catch {}
+  }
+
+  // 2. Fallback multi-escala y por cuadrantes (facturas completas con QR pequeño al pie)
+  const regions: Array<[number, number, number, number]> = [
+    [0, 0, 1, 1],
+    [0, 0.45, 1, 0.55],
+    [0, 0.45, 0.55, 0.55],
+    [0.45, 0.45, 0.55, 0.55],
+    [0.2, 0.2, 0.6, 0.6],
+  ];
+  const scales = [1600, 1000];
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+
+  for (const maxDim of scales) {
+    for (const [rx, ry, rw, rh] of regions) {
+      const sx = Math.floor(img.naturalWidth * rx);
+      const sy = Math.floor(img.naturalHeight * ry);
+      const sw = Math.max(1, Math.floor(img.naturalWidth * rw));
+      const sh = Math.max(1, Math.floor(img.naturalHeight * rh));
+
+      const scale = Math.min(1, maxDim / Math.max(sw, sh));
+      const dw = Math.max(1, Math.round(sw * scale));
+      const dh = Math.max(1, Math.round(sh * scale));
+
+      canvas.width = dw;
+      canvas.height = dh;
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+
+      const decoded = tryJsQrWithContrast(ctx, dw, dh);
+      if (decoded) return decoded;
+    }
+  }
+
+  return null;
+}
+
+function PurchasesContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { tenant } = useApp();
   const [purchases, setPurchases] = useState<PurchaseItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,6 +206,8 @@ export default function PurchasesPage() {
   const rafRef = useRef<number | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [decodingImage, setDecodingImage] = useState(false);
+  const detectingRef = useRef(false);
 
   // Formulario XML
   const [xmlText, setXmlText] = useState('');
@@ -126,13 +228,19 @@ export default function PurchasesPage() {
 
   useEffect(() => {
     loadPurchases();
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('scan') === '1') {
-        setQrModalOpen(true);
-      }
-    }
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('scan') === '1') {
+      setQrInput('');
+      setPreviewData(null);
+      setErrorMsg('');
+      setSuccessMsg('');
+      setScanMode('camera');
+      setQrModalOpen(true);
+      router.replace('/app/purchases', { scroll: false });
+    }
+  }, [searchParams, router]);
 
   const stopCamera = useCallback(() => {
     if (rafRef.current) {
@@ -178,17 +286,23 @@ export default function PurchasesPage() {
           totalItbis: String(res.totalItbis ?? ''),
         });
       } catch (err: any) {
-        // Fallback de parseo local si la URL tiene parámetros estándar DGII
+        // Fallback de parseo local si la URL tiene parámetros estándar DGII (ConsultaTimbre / ConsultaTimbreFC)
         try {
-          const input = rawQrText.trim();
+          const input = rawQrText.trim().replace(/&amp;/g, '&');
           const urlParams = input.startsWith('http')
             ? new URL(input).searchParams
             : new URLSearchParams(input.includes('?') ? input.split('?')[1] : input);
-          const rncEmisor = (urlParams.get('RncEmisor') || urlParams.get('rncEmisor') || urlParams.get('rncemisor') || '').replace(/\D/g, '');
-          const encf = (urlParams.get('ENCF') || urlParams.get('eNCF') || urlParams.get('encf') || '').toUpperCase();
-          const montoTotal = parseFloat(urlParams.get('MontoTotal') || urlParams.get('montoTotal') || '0');
-          const totalItbis = parseFloat(urlParams.get('TotalITBIS') || urlParams.get('totalITBIS') || urlParams.get('totalItbis') || '0');
-          const fechaEmision = urlParams.get('FechaEmision') || urlParams.get('fechaEmision') || new Date().toISOString().split('T')[0];
+          const rncEmisor = getQueryParamCI(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']).replace(/\D/g, '');
+          const encf = getQueryParamCI(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
+          const montoTotal = parseFloat(
+            getQueryParamCI(urlParams, ['MontoTotal', 'Total', 'Monto']).replace(/,/g, '') || '0'
+          );
+          const totalItbis = parseFloat(
+            getQueryParamCI(urlParams, ['TotalITBIS', 'ITBIS', 'MontoITBIS']).replace(/,/g, '') || '0'
+          );
+          const fechaEmision = normalizeDgiiDateLocal(
+            getQueryParamCI(urlParams, ['FechaEmision', 'Fecha', 'FechaFirma'])
+          );
 
           if (rncEmisor && encf) {
             setPreviewData({
@@ -243,6 +357,11 @@ export default function PurchasesPage() {
         await videoRef.current.play();
       }
 
+      const barcodeDetector =
+        typeof window !== 'undefined' && 'BarcodeDetector' in window
+          ? new (window as any).BarcodeDetector({ formats: ['qr_code'] })
+          : null;
+
       const scanFrame = () => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
@@ -264,13 +383,29 @@ export default function PurchasesPage() {
               return;
             }
           }
+
+          if (barcodeDetector && !detectingRef.current) {
+            detectingRef.current = true;
+            barcodeDetector
+              .detect(video)
+              .then((detected: any[]) => {
+                if (detected?.length && detected[0]?.rawValue && streamRef.current) {
+                  stopCamera();
+                  parseDecodedQr(String(detected[0].rawValue));
+                }
+              })
+              .catch(() => {})
+              .finally(() => {
+                detectingRef.current = false;
+              });
+          }
         }
         rafRef.current = requestAnimationFrame(scanFrame);
       };
 
       rafRef.current = requestAnimationFrame(scanFrame);
     } catch {
-      setCameraError('No se pudo activar la cámara (permiso denegado o cámara ocupada). Usa "Subir Foto" o "URL / Manual".');
+      setCameraError('No se pudo activar la cámara en vivo. Usa el botón de Cámara Nativa o "Subir Foto".');
       setCameraActive(false);
     }
   }, [parseDecodedQr, stopCamera]);
@@ -287,43 +422,40 @@ export default function PurchasesPage() {
     };
   }, [qrModalOpen, scanMode, previewData, startCamera, stopCamera]);
 
-  // Subir imagen/foto del QR y decodificar con jsQR
+  // Subir imagen/foto o captura nativa del QR y decodificar con multi-escala (BarcodeDetector + jsQR)
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     setErrorMsg('');
+    setDecodingImage(true);
 
     const reader = new FileReader();
+    reader.onerror = () => {
+      setDecodingImage(false);
+      setErrorMsg('No se pudo cargar la imagen seleccionada.');
+    };
     reader.onload = () => {
       const img = new Image();
       img.onload = async () => {
-        const canvas = document.createElement('canvas');
-        const maxDim = 1400;
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          const ratio = Math.min(maxDim / width, maxDim / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        ctx.drawImage(img, 0, 0, width, height);
-
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'attemptBoth',
-        });
-
-        if (code?.data) {
-          await parseDecodedQr(code.data);
-        } else {
-          setErrorMsg('No se detectó un código QR legible en la imagen. Acerca más la foto al QR o usa "URL / Manual".');
+        try {
+          const decodedText = await decodeQrFromImageElement(img);
+          if (decodedText) {
+            stopCamera();
+            await parseDecodedQr(decodedText);
+          } else {
+            setErrorMsg(
+              'No se detectó un código QR legible en la foto. Acerca más la cámara al cuadro QR con buena iluminación o usa "URL / Manual".'
+            );
+          }
+        } finally {
+          setDecodingImage(false);
         }
       };
-      img.onerror = () => setErrorMsg('No se pudo leer el archivo de imagen seleccionado.');
+      img.onerror = () => {
+        setDecodingImage(false);
+        setErrorMsg('No se pudo leer el archivo de imagen seleccionado.');
+      };
       img.src = String(reader.result || '');
     };
     reader.readAsDataURL(file);
@@ -874,26 +1006,43 @@ export default function PurchasesPage() {
             </div>
 
             <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
-              {/* Modo 1: Cámara en Vivo */}
+              {/* Modo 1: Cámara en Vivo + Botón de Cámara Nativa para Móviles */}
               {scanMode === 'camera' && !previewData && (
                 <div className="space-y-3">
                   <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
                     <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
                     <canvas ref={canvasRef} className="hidden" />
-                    {cameraActive && (
+                    {cameraActive && !decodingImage && (
                       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                         <div className="w-44 h-44 border-2 border-sky-400 rounded-2xl shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]" />
                       </div>
                     )}
-                    {!cameraActive && (
+                    {decodingImage && (
+                      <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center text-white text-xs gap-2 font-bold">
+                        <RefreshCw className="w-7 h-7 animate-spin text-sky-400" />
+                        <span>Analizando código QR de la factura...</span>
+                      </div>
+                    )}
+                    {!cameraActive && !decodingImage && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4 text-slate-300 text-xs gap-2">
                         <Camera className="w-8 h-8 text-sky-400" />
                         <span>{cameraError || 'Iniciando cámara para detectar el QR...'}</span>
                       </div>
                     )}
                   </div>
+                  <label className="w-full py-2.5 px-4 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition">
+                    <Camera className="w-4 h-4" />
+                    <span>{decodingImage ? 'Leyendo QR...' : 'Capturar con Cámara Nativa (Foto Rápida)'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={handleImageUpload}
+                    />
+                  </label>
                   <p className="text-[11px] text-center text-slate-500">
-                    Apunta la cámara al código QR impreso en la parte inferior de la factura electrónica DGII.
+                    Apunta al QR inferior de la factura e-CF o usa &quot;Capturar con Cámara Nativa&quot; en teléfonos con autofoco.
                   </p>
                 </div>
               )}
@@ -912,7 +1061,7 @@ export default function PurchasesPage() {
                   </div>
                   <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs cursor-pointer transition">
                     <UploadCloud className="w-4 h-4" />
-                    Elegir Foto / Captura (PNG, JPG)
+                    {decodingImage ? 'Analizando Foto...' : 'Elegir Foto / Captura (PNG, JPG)'}
                     <input
                       type="file"
                       accept="image/*"
@@ -1297,5 +1446,19 @@ export default function PurchasesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PurchasesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-10 text-center text-xs text-slate-500">
+          Cargando escáner de comprobantes e-CF...
+        </div>
+      }
+    >
+      <PurchasesContent />
+    </Suspense>
   );
 }

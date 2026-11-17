@@ -44,15 +44,15 @@ export default function ForgotPasswordPage() {
           {sent ? (
             <div className="p-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-center space-y-3">
               <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
-              <h3 className="font-bold text-white text-sm">Enlace Enviado con Éxito</h3>
+              <h3 className="font-bold text-white text-sm">Solicitud Registrada</h3>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Hemos enviado las instrucciones para restablecer tu contraseña a <strong>{email}</strong>. Revisa tu bandeja de entrada o carpeta de spam.
+                Si <strong>{email}</strong> está registrado, recibirás instrucciones para restablecer tu acceso o puedes contactar al administrador de tu empresa para asignar una nueva contraseña.
               </p>
               <Link
-                href="/reset-password?token=demo_token_antek_recovery"
-                className="inline-block mt-2 px-4 py-2 rounded-xl bg-sky-500 text-slate-950 font-bold text-xs"
+                href="/login"
+                className="inline-block mt-2 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition"
               >
-                Simular Clic en Enlace de Recuperación →
+                Volver a Iniciar Sesión →
               </Link>
             </div>
           ) : (

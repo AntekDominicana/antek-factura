@@ -90,7 +90,7 @@ export class InvoicesController {
     });
 
     // Incremento atómico del uso de facturas en el plan mensual
-    this.billingService.incrementUsage(tenantId);
+    await this.billingService.incrementUsage(tenantId);
 
     return result;
   }

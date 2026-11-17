@@ -36,12 +36,27 @@ export default function LoginPage() {
 
       if (data.user) {
         localStorage.setItem('antek_user', JSON.stringify(data.user));
+        localStorage.removeItem('antek_tenant_cache');
         if (data.accessToken) {
           localStorage.setItem('antek_token', data.accessToken);
         }
       }
 
-      router.push('/app/dashboard');
+      const params =
+        typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const redirectParam = params?.get('redirect');
+      const isSafeRedirect =
+        redirectParam && redirectParam.startsWith('/') && !redirectParam.startsWith('//');
+
+      const isRootAdmin =
+        data.user?.role === 'SUPERADMIN' ||
+        String(data.user?.email || '').toLowerCase() === 'rootfacturas@antek.com.do';
+
+      if (isSafeRedirect && (redirectParam !== '/superadmin' || isRootAdmin)) {
+        router.push(redirectParam);
+      } else {
+        router.push(isRootAdmin ? '/superadmin' : '/app/dashboard');
+      }
     } catch (err: any) {
       setError(err.message || 'Error al iniciar sesión. Verifica tus credenciales.');
     } finally {

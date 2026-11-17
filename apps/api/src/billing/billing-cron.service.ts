@@ -120,7 +120,7 @@ export class BillingCronService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 2. Control de Vencimientos y Días de Gracia
-    const result = this.billingService.evaluateSubscriptionsExpiration();
+    const result = await this.billingService.evaluateSubscriptionsExpiration();
     this.logger.log(
       `[BillingCron] Evaluación: ${result.totalActive} activas, ${result.movedToPastDue} a gracia (PAST_DUE 5d), ${result.movedToSuspended} suspendidas.`
     );

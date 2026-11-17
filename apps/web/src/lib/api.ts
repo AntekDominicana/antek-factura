@@ -1,31 +1,86 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || 'https://antek-factura-api.onrender.com';
 
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = document.cookie.match(new RegExp(`(?:^|; )${escaped}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    return localStorage.getItem('antek_token');
+    const stored = localStorage.getItem('antek_token');
+    if (stored) return stored;
+
+    const cookieToken = readCookie('antek_client_token') || readCookie('access_token');
+    if (cookieToken) {
+      localStorage.setItem('antek_token', cookieToken);
+      return cookieToken;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
+async function fetchSessionToken(): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const res = await fetch('/api/auth/session', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.accessToken) {
+      try {
+        localStorage.setItem('antek_token', data.accessToken);
+      } catch {}
+      return data.accessToken;
+    }
+  } catch {}
+  return null;
+}
+
+export async function ensureAuthToken(): Promise<string | null> {
+  const existing = getAuthToken();
+  if (existing) return existing;
+  return fetchSessionToken();
+}
+
 export async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...((options?.headers as Record<string, string>) || {}),
+  const buildHeaders = (token: string | null): Record<string, string> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options?.headers as Record<string, string>) || {}),
+    };
+    if (token && !headers['Authorization'] && !headers['authorization']) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
   };
 
-  if (token && !headers['Authorization'] && !headers['authorization']) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  let token = await ensureAuthToken();
+  let res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     credentials: 'include',
-    headers,
+    headers: buildHeaders(token),
   });
+
+  if (res.status === 401 && typeof window !== 'undefined') {
+    const freshToken = await fetchSessionToken();
+    if (freshToken && freshToken !== token) {
+      token = freshToken;
+      res = await fetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        credentials: 'include',
+        headers: buildHeaders(token),
+      });
+    }
+  }
 
   const contentType = res.headers.get('content-type') || '';
   const data = contentType.includes('application/json') ? await res.json() : await res.text();
@@ -43,17 +98,27 @@ export async function apiFetch<T = any>(path: string, options?: RequestInit): Pr
 }
 
 export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
+  let token = await ensureAuthToken();
+  const makeHeaders = (t: string | null): Record<string, string> =>
+    t ? { Authorization: `Bearer ${t}` } : {};
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  let res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'GET',
     credentials: 'include',
-    headers,
+    headers: makeHeaders(token),
   });
+
+  if (res.status === 401 && typeof window !== 'undefined') {
+    const freshToken = await fetchSessionToken();
+    if (freshToken && freshToken !== token) {
+      token = freshToken;
+      res = await fetch(`${API_BASE_URL}${path}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: makeHeaders(token),
+      });
+    }
+  }
 
   if (!res.ok) {
     let msg = `Error descargando archivo (${res.status})`;

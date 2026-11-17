@@ -17,6 +17,33 @@ export interface DgiiQrParsedData {
   estadoDgii: string;
 }
 
+function normalizeDgiiDate(rawDate?: string): string {
+  const today = new Date().toISOString().split('T')[0];
+  if (!rawDate) return today;
+  const cleaned = decodeURIComponent(rawDate.trim());
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) return cleaned;
+  const dmyMatch = cleaned.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (dmyMatch) {
+    return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+  }
+  const compactMatch = cleaned.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compactMatch) {
+    return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+  }
+  return cleaned;
+}
+
+function getQueryParamCaseInsensitive(params: URLSearchParams, candidates: string[]): string {
+  const normalizedCandidates = candidates.map((c) => c.toLowerCase().replace(/[_-]/g, ''));
+  for (const [key, value] of params.entries()) {
+    const normKey = key.toLowerCase().replace(/[_-]/g, '');
+    if (normalizedCandidates.includes(normKey) && value !== undefined && value !== null) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
 @Injectable()
 export class PurchasesService {
   private inMemoryPurchases: any[] = [];
@@ -24,10 +51,10 @@ export class PurchasesService {
   constructor(private readonly rncService: RncService) {}
 
   /**
-   * Parsea un URL o contenido de un código QR del Timbre e-CF emitido por DGII
+   * Parsea un URL o contenido de un código QR del Timbre e-CF / TimbreFC emitido por DGII
    */
   public async parseDgiiQr(rawInput: string, tenantId?: string): Promise<DgiiQrParsedData> {
-    const urlString = rawInput.trim();
+    const urlString = rawInput.trim().replace(/&amp;/g, '&');
 
     let urlParams: URLSearchParams;
     try {
@@ -43,13 +70,15 @@ export class PurchasesService {
       throw new BadRequestException('Formato de código QR / URL de DGII inválido.');
     }
 
-    const rncEmisor = urlParams.get('RncEmisor') || urlParams.get('rncEmisor') || urlParams.get('rncemisor') || '';
-    let rncComprador = urlParams.get('RncComprador') || urlParams.get('rncComprador') || urlParams.get('rnccomprador') || '';
-    const encf = (urlParams.get('ENCF') || urlParams.get('eNCF') || urlParams.get('encf') || '').toUpperCase();
-    const montoTotalStr = urlParams.get('MontoTotal') || urlParams.get('montoTotal') || urlParams.get('montototal') || '0';
-    const totalItbisStr = urlParams.get('TotalITBIS') || urlParams.get('totalITBIS') || urlParams.get('totalItbis') || urlParams.get('totalitbis') || '0';
-    const fechaEmision = urlParams.get('FechaEmision') || urlParams.get('fechaEmision') || urlParams.get('fechaemision') || new Date().toISOString().split('T')[0];
-    const codigoSeguridad = urlParams.get('CodigoSeguridad') || urlParams.get('codigoSeguridad') || urlParams.get('codigoseguridad') || undefined;
+    const rncEmisor = getQueryParamCaseInsensitive(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']);
+    let rncComprador = getQueryParamCaseInsensitive(urlParams, ['RncComprador', 'RncComp', 'Comprador']);
+    const encf = getQueryParamCaseInsensitive(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
+    const montoTotalStr = getQueryParamCaseInsensitive(urlParams, ['MontoTotal', 'Total', 'Monto']);
+    const totalItbisStr = getQueryParamCaseInsensitive(urlParams, ['TotalITBIS', 'ITBIS', 'MontoITBIS']);
+    const rawFecha = getQueryParamCaseInsensitive(urlParams, ['FechaEmision', 'Fecha', 'FechaFirma']);
+    const fechaEmision = normalizeDgiiDate(rawFecha);
+    const codigoSeguridad =
+      getQueryParamCaseInsensitive(urlParams, ['CodigoSeguridad', 'CodSeguridad', 'Seguridad']) || undefined;
 
     if (!rncEmisor || !encf) {
       throw new BadRequestException('El QR escaneado no contiene los parámetros fiscales mínimos requeridos (RNC Emisor y e-NCF).');
@@ -61,7 +90,16 @@ export class PurchasesService {
       if (!isNaN(parsedTipo)) {
         tipoEcf = parsedTipo;
       }
+    } else if (encf.startsWith('B')) {
+      const parsedTipo = parseInt(encf.substring(1, 3), 10);
+      if (!isNaN(parsedTipo)) {
+        tipoEcf = parsedTipo;
+      }
     }
+
+    const parsedMonto = parseFloat(montoTotalStr.replace(/,/g, '')) || 0;
+    const parsedItbisRaw = totalItbisStr ? parseFloat(totalItbisStr.replace(/,/g, '')) : NaN;
+    const parsedItbis = !isNaN(parsedItbisRaw) ? parsedItbisRaw : 0;
 
     let razonSocialEmisor = `RNC ${rncEmisor.replace(/\D/g, '')}`;
     try {
@@ -104,8 +142,8 @@ export class PurchasesService {
       encf,
       tipoEcf,
       fechaEmision,
-      montoTotal: parseFloat(montoTotalStr) || 0,
-      totalItbis: parseFloat(totalItbisStr) || 0,
+      montoTotal: parsedMonto,
+      totalItbis: parsedItbis,
       codigoSeguridad,
       estadoDgii: 'Aceptado',
     };

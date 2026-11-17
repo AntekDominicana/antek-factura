@@ -7,8 +7,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { prisma } from '@factura-ecf/database';
-import { PaymentGatewayFactory, PaymentGatewayAdapter } from './gateways/payment-gateway.interface';
+import { prisma, SubscriptionStatus } from '@factura-ecf/database';
+import { PaymentGatewayFactory } from './gateways/payment-gateway.interface';
 
 export interface PlanConfig {
   id: string;
@@ -23,13 +23,34 @@ export interface PlanConfig {
   allowedEcfTypes: number[];
   apiAccess: boolean;
   isActive: boolean;
+  paymentLinkMonthly?: string;
+  paymentLinkAnnual?: string;
+}
+
+export interface BankAccountConfig {
+  bankName: string;
+  accountNumber: string;
+  accountType: string;
+  holderName: string;
+  rnc: string;
+}
+
+export interface PlatformPaymentConfig {
+  activeGateway: string;
+  enabledMethods: string[];
+  planLinks: Record<string, { monthly: string; annual: string }>;
+  generalPaymentLink: string;
+  bankAccounts: BankAccountConfig[];
+  supportWhatsapp: string;
+  supportEmail: string;
+  instructions: string;
 }
 
 export interface SubscriptionState {
   id: string;
   tenantId: string;
   planId: string;
-  planCode: 'BASIC' | 'MEDIUM' | 'PRO';
+  planCode: string;
   plan: PlanConfig;
   status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
   currentPeriodStart: Date;
@@ -40,6 +61,9 @@ export interface SubscriptionState {
   monthlyInvoiceLimit: number;
   lastPaymentLinkUrl: string | null;
   externalCustomerId: string | null;
+  requestedPlanChange?: { planCode: string; billingCycle: string } | null;
+  pendingPayment?: PaymentRecord | null;
+  paymentSettings?: PlatformPaymentConfig;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -48,6 +72,7 @@ export interface PaymentRecord {
   id: string;
   subscriptionId: string;
   tenantId: string;
+  invoiceNumber: string;
   planCode: string;
   amount: number;
   currency: string;
@@ -56,137 +81,584 @@ export interface PaymentRecord {
   gatewayTransactionId: string | null;
   status: 'PENDING' | 'PAID' | 'FAILED';
   checkoutUrl: string | null;
+  adminNote?: string | null;
   paidAt: Date | null;
   createdAt: Date;
+}
+
+const DEFAULT_PLANS: PlanConfig[] = [
+  {
+    id: 'plan_basic_01',
+    code: 'BASIC',
+    name: 'Plan Básico',
+    description: 'Ideal para pequeños negocios, comercios y profesionales independientes.',
+    priceDop: 990,
+    priceUsd: 18,
+    monthlyInvoiceLimit: 100,
+    maxUsers: 2,
+    maxBranches: 1,
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43],
+    apiAccess: false,
+    isActive: true,
+  },
+  {
+    id: 'plan_medium_02',
+    code: 'MEDIUM',
+    name: 'Plan Medio',
+    description: 'Para empresas en crecimiento con alto volumen de facturación y sucursales.',
+    priceDop: 2450,
+    priceUsd: 45,
+    monthlyInvoiceLimit: 600,
+    maxUsers: 5,
+    maxBranches: 3,
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
+    apiAccess: true,
+    isActive: true,
+  },
+  {
+    id: 'plan_pro_03',
+    code: 'PRO',
+    name: 'Plan Pro',
+    description: 'Para corporaciones, distribuidoras y cadenas con emisión masiva vía API y multimoneda.',
+    priceDop: 4900,
+    priceUsd: 90,
+    monthlyInvoiceLimit: 3000,
+    maxUsers: 25,
+    maxBranches: 10,
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47],
+    apiAccess: true,
+    isActive: true,
+  },
+];
+
+const DEFAULT_PAYMENT_SETTINGS: PlatformPaymentConfig = {
+  activeGateway: 'CARDNET',
+  enabledMethods: ['CARD_LINK', 'BANK_TRANSFER'],
+  planLinks: {
+    BASIC: { monthly: '', annual: '' },
+    MEDIUM: { monthly: '', annual: '' },
+    PRO: { monthly: '', annual: '' },
+  },
+  generalPaymentLink: '',
+  bankAccounts: [
+    {
+      bankName: 'Banco Popular Dominicano',
+      accountNumber: '798451203',
+      accountType: 'Corriente Empresarial DOP',
+      holderName: 'ANTEK Dominicana SRL',
+      rnc: '131880738',
+    },
+    {
+      bankName: 'Banreservas',
+      accountNumber: '9601428571',
+      accountType: 'Corriente DOP',
+      holderName: 'ANTEK Dominicana SRL',
+      rnc: '131880738',
+    },
+  ],
+  supportWhatsapp: '18095550199',
+  supportEmail: 'facturacion@antek.com.do',
+  instructions:
+    'Realiza tu pago con tarjeta mediante el Link de Pago Seguro o por transferencia bancaria. Una vez completado, el administrador activará tu plan y te enviará tu factura fiscal e-CF.',
+};
+
+function escapeHtml(val: unknown): string {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseGatewayMeta(
+  rawGateway: string | null | undefined,
+  fallbackPlanCode: string
+): { gateway: string; planCode: string; billingCycle: 'MONTHLY' | 'ANNUAL' } {
+  const str = String(rawGateway || 'CARDNET').trim();
+  if (str.includes('|')) {
+    const [gw, plan, cycle] = str.split('|');
+    return {
+      gateway: gw || 'CARDNET',
+      planCode: (plan || fallbackPlanCode || 'MEDIUM').toUpperCase(),
+      billingCycle: cycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY',
+    };
+  }
+  return {
+    gateway: str || 'CARDNET',
+    planCode: (fallbackPlanCode || 'MEDIUM').toUpperCase(),
+    billingCycle: 'MONTHLY',
+  };
 }
 
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
+  private readonly subscriptionsFallback = new Map<string, SubscriptionState>();
+  private plansSeeded = false;
 
-  // Catálogo oficial de Planes SaaS ANTEK Factura
-  public readonly plans: PlanConfig[] = [
-    {
-      id: 'plan_basic_01',
-      code: 'BASIC',
-      name: 'Plan Básico',
-      description: 'Ideal para pequeños negocios, comercios y profesionales independientes.',
-      priceDop: 990,
-      priceUsd: 18,
-      monthlyInvoiceLimit: 100,
-      maxUsers: 2,
-      maxBranches: 1,
-      allowedEcfTypes: [31, 32], // Factura de Crédito Fiscal y Consumo
-      apiAccess: false,
-      isActive: true,
-    },
-    {
-      id: 'plan_medium_02',
-      code: 'MEDIUM',
-      name: 'Plan Medio',
-      description: 'Para empresas en crecimiento con alto volumen de facturación y sucursales.',
-      priceDop: 2450,
-      priceUsd: 45,
-      monthlyInvoiceLimit: 600,
-      maxUsers: 5,
-      maxBranches: 3,
-      allowedEcfTypes: [31, 32, 33, 34, 44, 45], // Crédito Fiscal, Consumo, Notas Débito/Crédito, Regímenes Especiales, Gubernamental
-      apiAccess: true,
-      isActive: true,
-    },
-    {
-      id: 'plan_pro_03',
-      code: 'PRO',
-      name: 'Plan Pro',
-      description: 'Para corporaciones, distribuidoras y cadenas con emisión masiva vía API y multimoneda.',
-      priceDop: 4900,
-      priceUsd: 90,
-      monthlyInvoiceLimit: 3000,
-      maxUsers: 25,
-      maxBranches: 10,
-      allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47], // Toda la gama de comprobantes fiscales DGII
-      apiAccess: true,
-      isActive: true,
-    },
-  ];
-
-  // Almacenamiento reactivo en memoria con persistencia de tenant
-  private subscriptions = new Map<string, SubscriptionState>();
-  private payments = new Map<string, PaymentRecord>();
-
-  constructor() {
-    this.initDefaultSubscription('tenant-principal');
-  }
-
-  private initDefaultSubscription(tenantId: string) {
-    if (!this.subscriptions.has(tenantId)) {
-      const defaultPlan = this.plans.find((p) => p.code === 'MEDIUM') || this.plans[1];
-      const now = new Date();
-      const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-      const sub: SubscriptionState = {
-        id: `sub_${tenantId}`,
-        tenantId,
-        planId: defaultPlan.id,
-        planCode: defaultPlan.code,
-        plan: defaultPlan,
-        status: 'ACTIVE',
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
-        gracePeriodEndsAt: null,
-        invoicesUsedCurrentPeriod: 0,
-        monthlyInvoiceLimit: defaultPlan.monthlyInvoiceLimit,
-        lastPaymentLinkUrl: null,
-        externalCustomerId: null,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      this.subscriptions.set(tenantId, sub);
-
-      // Registrar historial inicial de pago
-      const initialPayment: PaymentRecord = {
-        id: `pay_initial_${tenantId}`,
-        subscriptionId: sub.id,
-        tenantId,
-        planCode: defaultPlan.code,
-        amount: defaultPlan.priceDop,
-        currency: 'DOP',
-        billingCycle: 'MONTHLY',
-        gateway: 'CARDNET',
-        gatewayTransactionId: 'cn_init_98231a',
-        status: 'PAID',
-        checkoutUrl: null,
-        paidAt: now,
-        createdAt: now,
-      };
-      this.payments.set(initialPayment.id, initialPayment);
+  private async ensureDefaultPlans(): Promise<void> {
+    if (this.plansSeeded) return;
+    try {
+      for (const p of DEFAULT_PLANS) {
+        await prisma.plan.upsert({
+          where: { code: p.code },
+          update: {},
+          create: {
+            code: p.code,
+            name: p.name,
+            description: p.description,
+            priceDop: p.priceDop,
+            priceUsd: p.priceUsd,
+            monthlyInvoiceLimit: p.monthlyInvoiceLimit,
+            maxUsers: p.maxUsers,
+            maxBranches: p.maxBranches,
+            allowedEcfTypes: p.allowedEcfTypes,
+            apiAccess: p.apiAccess,
+            isActive: p.isActive,
+          },
+        });
+      }
+      this.plansSeeded = true;
+    } catch (err: any) {
+      this.logger.warn(`[Billing] Aviso al verificar planes iniciales: ${err?.message || err}`);
     }
   }
 
-  public getPlans(): PlanConfig[] {
-    return this.plans;
+  public async getPaymentSettings(): Promise<PlatformPaymentConfig> {
+    try {
+      const latest = await prisma.auditLog.findFirst({
+        where: {
+          entity: 'PlatformPaymentConfig',
+          action: 'UPDATE_PAYMENT_SETTINGS',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const saved = (latest?.newPayload || {}) as Partial<PlatformPaymentConfig>;
+      return {
+        ...DEFAULT_PAYMENT_SETTINGS,
+        ...saved,
+        planLinks: {
+          BASIC: { ...DEFAULT_PAYMENT_SETTINGS.planLinks.BASIC, ...(saved.planLinks?.BASIC || {}) },
+          MEDIUM: { ...DEFAULT_PAYMENT_SETTINGS.planLinks.MEDIUM, ...(saved.planLinks?.MEDIUM || {}) },
+          PRO: { ...DEFAULT_PAYMENT_SETTINGS.planLinks.PRO, ...(saved.planLinks?.PRO || {}) },
+        },
+        enabledMethods:
+          Array.isArray(saved.enabledMethods) && saved.enabledMethods.length > 0
+            ? saved.enabledMethods
+            : DEFAULT_PAYMENT_SETTINGS.enabledMethods,
+        bankAccounts:
+          Array.isArray(saved.bankAccounts) && saved.bankAccounts.length > 0
+            ? saved.bankAccounts
+            : DEFAULT_PAYMENT_SETTINGS.bankAccounts,
+      };
+    } catch {
+      return DEFAULT_PAYMENT_SETTINGS;
+    }
   }
 
-  public getSubscription(tenantId: string = 'tenant-principal'): SubscriptionState {
-    this.initDefaultSubscription(tenantId);
-    const sub = this.subscriptions.get(tenantId)!;
+  public async updatePaymentSettings(
+    updates: Partial<PlatformPaymentConfig>,
+    adminUserId?: string
+  ): Promise<PlatformPaymentConfig> {
+    const current = await this.getPaymentSettings();
+    const merged: PlatformPaymentConfig = {
+      ...current,
+      ...updates,
+      planLinks: {
+        BASIC: { ...current.planLinks.BASIC, ...(updates.planLinks?.BASIC || {}) },
+        MEDIUM: { ...current.planLinks.MEDIUM, ...(updates.planLinks?.MEDIUM || {}) },
+        PRO: { ...current.planLinks.PRO, ...(updates.planLinks?.PRO || {}) },
+      },
+      enabledMethods:
+        Array.isArray(updates.enabledMethods) && updates.enabledMethods.length > 0
+          ? updates.enabledMethods
+          : current.enabledMethods,
+      bankAccounts: Array.isArray(updates.bankAccounts)
+        ? updates.bankAccounts
+        : current.bankAccounts,
+    };
 
-    // Calcular días de gracia restantes si está en PAST_DUE
-    let graceDaysRemaining: number | undefined;
-    if (sub.status === 'PAST_DUE' && sub.gracePeriodEndsAt) {
-      const msLeft = sub.gracePeriodEndsAt.getTime() - Date.now();
-      graceDaysRemaining = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
+    await prisma.auditLog.create({
+      data: {
+        tenantId: null,
+        userId: adminUserId || 'SUPERADMIN',
+        action: 'UPDATE_PAYMENT_SETTINGS',
+        entity: 'PlatformPaymentConfig',
+        entityId: 'platform-payment-config',
+        oldPayload: current as any,
+        newPayload: merged as any,
+      },
+    });
+
+    return merged;
+  }
+
+  public async getPlans(): Promise<PlanConfig[]> {
+    await this.ensureDefaultPlans();
+    const settings = await this.getPaymentSettings();
+
+    try {
+      const dbPlans = await prisma.plan.findMany({
+        orderBy: { priceDop: 'asc' },
+      });
+
+      if (dbPlans.length > 0) {
+        return dbPlans.map((p) => {
+          const links = settings.planLinks?.[p.code] || { monthly: '', annual: '' };
+          return {
+            id: p.id,
+            code: p.code as 'BASIC' | 'MEDIUM' | 'PRO',
+            name: p.name,
+            description: p.description || '',
+            priceDop: Number(p.priceDop),
+            priceUsd: Number(p.priceUsd),
+            monthlyInvoiceLimit: p.monthlyInvoiceLimit,
+            maxUsers: p.maxUsers,
+            maxBranches: p.maxBranches,
+            allowedEcfTypes: p.allowedEcfTypes,
+            apiAccess: p.apiAccess,
+            isActive: p.isActive,
+            paymentLinkMonthly: links.monthly || '',
+            paymentLinkAnnual: links.annual || '',
+          };
+        });
+      }
+    } catch {}
+
+    return DEFAULT_PLANS.map((p) => ({
+      ...p,
+      paymentLinkMonthly: settings.planLinks?.[p.code]?.monthly || '',
+      paymentLinkAnnual: settings.planLinks?.[p.code]?.annual || '',
+    }));
+  }
+
+  public async updatePlan(
+    code: string,
+    data: {
+      name?: string;
+      description?: string;
+      priceDop?: number;
+      priceUsd?: number;
+      monthlyInvoiceLimit?: number;
+      maxUsers?: number;
+      maxBranches?: number;
+      allowedEcfTypes?: number[];
+      apiAccess?: boolean;
+      isActive?: boolean;
+      paymentLinkMonthly?: string;
+      paymentLinkAnnual?: string;
+    },
+    adminUserId?: string
+  ): Promise<PlanConfig> {
+    await this.ensureDefaultPlans();
+    const upperCode = code.toUpperCase();
+    const existing = await prisma.plan.findUnique({ where: { code: upperCode } });
+    if (!existing) {
+      throw new NotFoundException(`El plan ${upperCode} no existe.`);
     }
+
+    const updated = await prisma.plan.update({
+      where: { code: upperCode },
+      data: {
+        name: data.name !== undefined ? String(data.name).trim() : existing.name,
+        description: data.description !== undefined ? String(data.description).trim() : existing.description,
+        priceDop: data.priceDop !== undefined ? Number(data.priceDop) : existing.priceDop,
+        priceUsd: data.priceUsd !== undefined ? Number(data.priceUsd) : existing.priceUsd,
+        monthlyInvoiceLimit:
+          data.monthlyInvoiceLimit !== undefined
+            ? Number(data.monthlyInvoiceLimit)
+            : existing.monthlyInvoiceLimit,
+        maxUsers: data.maxUsers !== undefined ? Number(data.maxUsers) : existing.maxUsers,
+        maxBranches: data.maxBranches !== undefined ? Number(data.maxBranches) : existing.maxBranches,
+        allowedEcfTypes: Array.isArray(data.allowedEcfTypes)
+          ? data.allowedEcfTypes.map(Number)
+          : existing.allowedEcfTypes,
+        apiAccess: data.apiAccess !== undefined ? Boolean(data.apiAccess) : existing.apiAccess,
+        isActive: data.isActive !== undefined ? Boolean(data.isActive) : existing.isActive,
+      },
+    });
+
+    const settings = await this.getPaymentSettings();
+    const currentLinks = settings.planLinks?.[upperCode] || { monthly: '', annual: '' };
+    const nextMonthly =
+      data.paymentLinkMonthly !== undefined ? String(data.paymentLinkMonthly).trim() : currentLinks.monthly;
+    const nextAnnual =
+      data.paymentLinkAnnual !== undefined ? String(data.paymentLinkAnnual).trim() : currentLinks.annual;
+
+    if (data.paymentLinkMonthly !== undefined || data.paymentLinkAnnual !== undefined) {
+      await this.updatePaymentSettings(
+        {
+          planLinks: {
+            ...settings.planLinks,
+            [upperCode]: {
+              monthly: nextMonthly,
+              annual: nextAnnual,
+            },
+          },
+        },
+        adminUserId
+      );
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId: null,
+        userId: adminUserId || 'SUPERADMIN',
+        action: 'PLAN_UPDATED_BY_ADMIN',
+        entity: 'Plan',
+        entityId: updated.id,
+        oldPayload: {
+          name: existing.name,
+          priceDop: Number(existing.priceDop),
+          monthlyInvoiceLimit: existing.monthlyInvoiceLimit,
+        },
+        newPayload: {
+          name: updated.name,
+          priceDop: Number(updated.priceDop),
+          monthlyInvoiceLimit: updated.monthlyInvoiceLimit,
+          paymentLinkMonthly: nextMonthly,
+          paymentLinkAnnual: nextAnnual,
+        },
+      },
+    });
 
     return {
-      ...sub,
-      graceDaysRemaining,
+      id: updated.id,
+      code: updated.code as 'BASIC' | 'MEDIUM' | 'PRO',
+      name: updated.name,
+      description: updated.description || '',
+      priceDop: Number(updated.priceDop),
+      priceUsd: Number(updated.priceUsd),
+      monthlyInvoiceLimit: updated.monthlyInvoiceLimit,
+      maxUsers: updated.maxUsers,
+      maxBranches: updated.maxBranches,
+      allowedEcfTypes: updated.allowedEcfTypes,
+      apiAccess: updated.apiAccess,
+      isActive: updated.isActive,
+      paymentLinkMonthly: nextMonthly,
+      paymentLinkAnnual: nextAnnual,
     };
   }
 
+  public async getSubscription(tenantId: string = 'tenant-principal'): Promise<SubscriptionState> {
+    await this.ensureDefaultPlans();
+    const settings = await this.getPaymentSettings();
+
+    try {
+      let dbSub = await prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      });
+
+      if (!dbSub) {
+        const tenantExists = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { id: true },
+        });
+        if (tenantExists) {
+          const defaultPlan =
+            (await prisma.plan.findUnique({ where: { code: 'MEDIUM' } })) ||
+            (await prisma.plan.findFirst());
+          if (defaultPlan) {
+            const now = new Date();
+            dbSub = await prisma.subscription.create({
+              data: {
+                tenantId,
+                planId: defaultPlan.id,
+                status: 'ACTIVE',
+                currentPeriodStart: now,
+                currentPeriodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+                invoicesUsedCurrentPeriod: 0,
+              },
+              include: { plan: true },
+            });
+          }
+        }
+      }
+
+      if (dbSub && dbSub.plan) {
+        let graceDaysRemaining: number | undefined;
+        if (dbSub.status === 'PAST_DUE' && dbSub.gracePeriodEndsAt) {
+          const msLeft = dbSub.gracePeriodEndsAt.getTime() - Date.now();
+          graceDaysRemaining = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
+        }
+
+        const pendingRaw = await prisma.subscriptionPayment.findFirst({
+          where: { subscriptionId: dbSub.id, status: 'PENDING' },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        let pendingPayment: PaymentRecord | null = null;
+        if (pendingRaw) {
+          const meta = parseGatewayMeta(pendingRaw.gateway, dbSub.plan.code);
+          const noteLog = await prisma.auditLog.findFirst({
+            where: { entity: 'SubscriptionPayment', entityId: pendingRaw.id },
+            orderBy: { createdAt: 'desc' },
+          });
+          const notePayload = (noteLog?.newPayload || {}) as any;
+
+          pendingPayment = {
+            id: pendingRaw.id,
+            subscriptionId: pendingRaw.subscriptionId,
+            tenantId,
+            invoiceNumber:
+              pendingRaw.gatewayTransactionId || pendingRaw.id.slice(0, 12).toUpperCase(),
+            planCode: meta.planCode,
+            amount: Number(pendingRaw.amount),
+            currency: pendingRaw.currency,
+            billingCycle: meta.billingCycle,
+            gateway: meta.gateway,
+            gatewayTransactionId: pendingRaw.gatewayTransactionId,
+            status: pendingRaw.status,
+            checkoutUrl: pendingRaw.checkoutUrl,
+            adminNote: notePayload?.adminNote || null,
+            paidAt: pendingRaw.paidAt,
+            createdAt: pendingRaw.createdAt,
+          };
+        }
+
+        let requestedPlanChange: { planCode: string; billingCycle: string } | null = null;
+        if (dbSub.externalCustomerId?.startsWith('REQ:')) {
+          const [, reqPlan, reqCycle] = dbSub.externalCustomerId.split(':');
+          if (reqPlan) {
+            requestedPlanChange = {
+              planCode: reqPlan,
+              billingCycle: reqCycle || 'MONTHLY',
+            };
+          }
+        }
+
+        return {
+          id: dbSub.id,
+          tenantId: dbSub.tenantId,
+          planId: dbSub.planId,
+          planCode: dbSub.plan.code,
+          plan: {
+            id: dbSub.plan.id,
+            code: dbSub.plan.code as 'BASIC' | 'MEDIUM' | 'PRO',
+            name: dbSub.plan.name,
+            description: dbSub.plan.description || '',
+            priceDop: Number(dbSub.plan.priceDop),
+            priceUsd: Number(dbSub.plan.priceUsd),
+            monthlyInvoiceLimit: dbSub.plan.monthlyInvoiceLimit,
+            maxUsers: dbSub.plan.maxUsers,
+            maxBranches: dbSub.plan.maxBranches,
+            allowedEcfTypes: dbSub.plan.allowedEcfTypes,
+            apiAccess: dbSub.plan.apiAccess,
+            isActive: dbSub.plan.isActive,
+          },
+          status: dbSub.status,
+          currentPeriodStart: dbSub.currentPeriodStart,
+          currentPeriodEnd: dbSub.currentPeriodEnd,
+          gracePeriodEndsAt: dbSub.gracePeriodEndsAt,
+          graceDaysRemaining,
+          invoicesUsedCurrentPeriod: dbSub.invoicesUsedCurrentPeriod,
+          monthlyInvoiceLimit: dbSub.plan.monthlyInvoiceLimit,
+          lastPaymentLinkUrl: dbSub.lastPaymentLinkUrl,
+          externalCustomerId: dbSub.externalCustomerId,
+          requestedPlanChange,
+          pendingPayment,
+          paymentSettings: settings,
+          createdAt: dbSub.createdAt,
+          updatedAt: dbSub.updatedAt,
+        };
+      }
+    } catch (err: any) {
+      this.logger.warn(`[Billing] Fallback en getSubscription(${tenantId}): ${err?.message || err}`);
+    }
+
+    const cached = this.subscriptionsFallback.get(tenantId);
+    if (cached) {
+      return { ...cached, paymentSettings: settings };
+    }
+
+    const fallbackPlan = DEFAULT_PLANS[1];
+    const now = new Date();
+    const created: SubscriptionState = {
+      id: `sub_${tenantId}`,
+      tenantId,
+      planId: fallbackPlan.id,
+      planCode: fallbackPlan.code,
+      plan: fallbackPlan,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+      gracePeriodEndsAt: null,
+      invoicesUsedCurrentPeriod: 0,
+      monthlyInvoiceLimit: fallbackPlan.monthlyInvoiceLimit,
+      lastPaymentLinkUrl: null,
+      externalCustomerId: null,
+      requestedPlanChange: null,
+      pendingPayment: null,
+      paymentSettings: settings,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.subscriptionsFallback.set(tenantId, created);
+    return created;
+  }
+
+  public async getPaymentHistory(tenantId: string = 'tenant-principal'): Promise<PaymentRecord[]> {
+    try {
+      const sub = await prisma.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      });
+      if (!sub) return [];
+
+      const rows = await prisma.subscriptionPayment.findMany({
+        where: { subscriptionId: sub.id },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const logs = await prisma.auditLog.findMany({
+        where: {
+          tenantId,
+          entity: 'SubscriptionPayment',
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      });
+
+      const noteByPaymentId = new Map<string, string>();
+      for (const l of logs) {
+        if (l.entityId && !noteByPaymentId.has(l.entityId)) {
+          const payload = (l.newPayload || {}) as any;
+          if (payload?.adminNote) {
+            noteByPaymentId.set(l.entityId, String(payload.adminNote));
+          }
+        }
+      }
+
+      return rows.map((p) => {
+        const meta = parseGatewayMeta(p.gateway, sub.plan?.code || 'MEDIUM');
+        return {
+          id: p.id,
+          subscriptionId: p.subscriptionId,
+          tenantId,
+          invoiceNumber: p.gatewayTransactionId || p.id.slice(0, 12).toUpperCase(),
+          planCode: meta.planCode,
+          amount: Number(p.amount),
+          currency: p.currency,
+          billingCycle: meta.billingCycle,
+          gateway: meta.gateway,
+          gatewayTransactionId: p.gatewayTransactionId,
+          status: p.status,
+          checkoutUrl: p.checkoutUrl,
+          adminNote: noteByPaymentId.get(p.id) || null,
+          paidAt: p.paidAt,
+          createdAt: p.createdAt,
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * 1. Generación de Link de Pago (POST /v1/billing/checkout)
+   * Generación de orden de pago / solicitud de cambio de plan persistida en Supabase PostgreSQL
    */
   public async createCheckout(
     tenantId: string = 'tenant-principal',
@@ -200,87 +672,267 @@ export class BillingService {
     }
   ): Promise<{
     paymentId: string;
+    invoiceNumber: string;
     checkoutUrl: string;
     amount: number;
     currency: string;
     planCode: string;
+    planName: string;
     billingCycle: 'MONTHLY' | 'ANNUAL';
     gateway: string;
+    isExternalLink: boolean;
+    paymentSettings: PlatformPaymentConfig;
   }> {
-    this.initDefaultSubscription(tenantId);
-    const sub = this.subscriptions.get(tenantId)!;
+    await this.ensureDefaultPlans();
+    const sub = await this.getSubscription(tenantId);
+    const settings = await this.getPaymentSettings();
 
-    const targetPlan = this.plans.find((p) => p.code === dto.planCode);
+    const requestedCode = String(dto.planCode || 'MEDIUM').toUpperCase();
+    const targetPlan = await prisma.plan.findUnique({ where: { code: requestedCode } });
     if (!targetPlan) {
       throw new BadRequestException(`Plan inválido: ${dto.planCode}. Opciones: BASIC, MEDIUM, PRO.`);
     }
 
-    const billingCycle = dto.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
-    // Descuento anual del 15% (aprox 10 meses de costo por 12 meses de servicio)
-    const amount = billingCycle === 'ANNUAL' ? Math.round(targetPlan.priceDop * 10.2) : targetPlan.priceDop;
+    const billingCycle: 'MONTHLY' | 'ANNUAL' = dto.billingCycle === 'ANNUAL' ? 'ANNUAL' : 'MONTHLY';
+    const basePrice = Number(targetPlan.priceDop);
+    const amount = billingCycle === 'ANNUAL' ? Math.round(basePrice * 10.2) : basePrice;
     const currency = 'DOP';
 
-    const paymentId = `pay_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const gateway = dto.gateway || process.env.DEFAULT_PAYMENT_GATEWAY || 'MOCK';
-    const adapter = PaymentGatewayFactory.getAdapter(gateway);
+    const planLink =
+      billingCycle === 'ANNUAL'
+        ? settings.planLinks?.[targetPlan.code]?.annual
+        : settings.planLinks?.[targetPlan.code]?.monthly;
+    const configuredExternalLink = (planLink || settings.generalPaymentLink || '').trim();
 
-    const host = process.env.WEB_BASE_URL || 'http://localhost:3000';
-    const returnUrl = dto.returnUrl || `${host}/app/settings/billing`;
-    const cancelUrl = dto.cancelUrl || `${host}/app/settings/billing?cancelled=true`;
+    const invoiceNumber = `FAC-ANTEK-${Date.now().toString().slice(-6)}-${crypto
+      .randomBytes(2)
+      .toString('hex')
+      .toUpperCase()}`;
+    const host = process.env.WEB_BASE_URL || 'https://antek-factura.vercel.app';
+    const checkoutUrl =
+      configuredExternalLink || `${host}/app/settings/billing?order=${encodeURIComponent(invoiceNumber)}`;
 
-    const session = await adapter.createPaymentSession({
-      paymentId,
-      subscriptionId: sub.id,
-      tenantId,
-      planCode: targetPlan.code,
-      planName: targetPlan.name,
-      amount,
-      currency,
-      billingCycle,
-      customerEmail: dto.customerEmail,
-      returnUrl,
-      cancelUrl,
+    const selectedGateway = (dto.gateway || settings.activeGateway || 'CARDNET').toUpperCase();
+    const encodedGateway = `${selectedGateway}|${targetPlan.code}|${billingCycle}`;
+
+    const createdPayment = await prisma.subscriptionPayment.create({
+      data: {
+        subscriptionId: sub.id,
+        amount,
+        currency,
+        gateway: encodedGateway,
+        gatewayTransactionId: invoiceNumber,
+        status: 'PENDING',
+        checkoutUrl,
+      },
     });
 
-    const paymentRecord: PaymentRecord = {
-      id: paymentId,
-      subscriptionId: sub.id,
-      tenantId,
-      planCode: targetPlan.code,
-      amount,
-      currency,
-      billingCycle,
-      gateway: session.gateway,
-      gatewayTransactionId: session.gatewayTransactionId,
-      status: 'PENDING',
-      checkoutUrl: session.checkoutUrl,
-      paidAt: null,
-      createdAt: new Date(),
-    };
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: {
+        lastPaymentLinkUrl: checkoutUrl,
+        externalCustomerId: `REQ:${targetPlan.code}:${billingCycle}`,
+      },
+    });
 
-    this.payments.set(paymentId, paymentRecord);
-
-    // Actualizar referencia de último link en la suscripción
-    sub.lastPaymentLinkUrl = session.checkoutUrl;
-    sub.updatedAt = new Date();
+    await prisma.auditLog.create({
+      data: {
+        tenantId,
+        action: 'CLIENT_PLAN_CHANGE_REQUEST',
+        entity: 'Subscription',
+        entityId: sub.id,
+        newPayload: {
+          planCode: targetPlan.code,
+          billingCycle,
+          amount,
+          paymentId: createdPayment.id,
+          invoiceNumber,
+          gateway: selectedGateway,
+          checkoutUrl,
+        },
+      },
+    });
 
     this.logger.log(
-      `[Billing] Link de pago generado (${paymentId}) para ${tenantId}: Plan ${targetPlan.code} - ${amount} DOP (${billingCycle})`
+      `[Billing] Solicitud de cambio de plan / orden ${invoiceNumber} (${createdPayment.id}) para ${tenantId}: ${targetPlan.code} ${billingCycle} DOP ${amount}`
     );
 
     return {
-      paymentId,
-      checkoutUrl: session.checkoutUrl,
+      paymentId: createdPayment.id,
+      invoiceNumber,
+      checkoutUrl,
       amount,
       currency,
       planCode: targetPlan.code,
+      planName: targetPlan.name,
       billingCycle,
-      gateway: session.gateway,
+      gateway: selectedGateway,
+      isExternalLink: Boolean(configuredExternalLink),
+      paymentSettings: settings,
     };
   }
 
   /**
-   * 2. Webhook de Confirmación (POST /v1/webhooks/payments)
+   * Comprobante / Orden de Factura imprimible para un pago de suscripción
+   */
+  public async getPaymentReceiptHtml(
+    tenantId: string,
+    paymentId: string,
+    isSuperAdmin: boolean = false
+  ): Promise<string> {
+    const payment = await prisma.subscriptionPayment.findUnique({
+      where: { id: paymentId },
+      include: {
+        subscription: {
+          include: {
+            tenant: true,
+            plan: true,
+          },
+        },
+      },
+    });
+
+    if (!payment || (!isSuperAdmin && payment.subscription.tenantId !== tenantId)) {
+      throw new NotFoundException('Factura o comprobante de suscripción no encontrado.');
+    }
+
+    const meta = parseGatewayMeta(payment.gateway, payment.subscription.plan.code);
+    const settings = await this.getPaymentSettings();
+    const noteLog = await prisma.auditLog.findFirst({
+      where: { entity: 'SubscriptionPayment', entityId: payment.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const adminNote = (noteLog?.newPayload as any)?.adminNote || '';
+
+    const tenant = payment.subscription.tenant;
+    const amount = Number(payment.amount);
+    const subtotal = amount / 1.18;
+    const itbis = amount - subtotal;
+    const invoiceNum = payment.gatewayTransactionId || payment.id.slice(0, 12).toUpperCase();
+    const isPaid = payment.status === 'PAID';
+
+    const banksHtml = settings.bankAccounts
+      .map(
+        (b) => `
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-weight:600;">${escapeHtml(b.bankName)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;">${escapeHtml(b.accountNumber)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">${escapeHtml(b.accountType)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e2e8f0;">${escapeHtml(b.holderName)} (RNC ${escapeHtml(b.rnc)})</td>
+        </tr>`
+      )
+      .join('');
+
+    const hasExternalPayUrl =
+      !isPaid && payment.checkoutUrl && payment.checkoutUrl.startsWith('http');
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Factura ${escapeHtml(invoiceNum)} - ANTEK Factura</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f1f5f9; color:#0f172a; margin:0; padding:24px; }
+    .card { max-width:780px; margin:0 auto; background:#fff; border-radius:18px; border:1px solid #cbd5e1; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,0.08); }
+    .header { background:#020617; color:#fff; padding:24px 28px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+    .badge { padding:6px 12px; border-radius:999px; font-size:12px; font-weight:800; }
+    .paid { background:#065f46; color:#d1fae5; }
+    .pending { background:#78350f; color:#fef3c7; }
+    .body { padding:28px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
+    .box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:14px; font-size:13px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px; }
+    th { text-align:left; background:#f8fafc; padding:10px; border-bottom:2px solid #e2e8f0; color:#475569; font-size:11px; text-transform:uppercase; }
+    .totals { max-width:280px; margin-left:auto; font-size:13px; }
+    .totals div { display:flex; justify-content:space-between; padding:6px 0; }
+    .totals .grand { font-size:17px; font-weight:900; border-top:2px solid #0f172a; padding-top:10px; margin-top:6px; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:20px; }
+    .btn { display:inline-block; padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; text-decoration:none; cursor:pointer; border:none; }
+    .btn-primary { background:#0284c7; color:#fff; }
+    .btn-dark { background:#0f172a; color:#fff; }
+    @media print { body { background:#fff; padding:0; } .no-print { display:none !important; } .card { border:none; box-shadow:none; } }
+    @media (max-width:600px) { .grid { grid-template-columns:1fr; } body { padding:12px; } .body { padding:18px; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div>
+        <div style="font-size:20px;font-weight:900;letter-spacing:0.04em;">ANTEK FACTURA</div>
+        <div style="font-size:12px;color:#94a3b8;">ANTEK Dominicana SRL · RNC 131880738</div>
+      </div>
+      <div style="text-align:right;">
+        <span class="badge ${isPaid ? 'paid' : 'pending'}">${isPaid ? 'PAGADO' : 'PENDIENTE DE PAGO'}</span>
+        <div style="font-family:monospace;font-size:13px;margin-top:6px;color:#38bdf8;">${escapeHtml(invoiceNum)}</div>
+      </div>
+    </div>
+
+    <div class="body">
+      <div class="grid">
+        <div class="box">
+          <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Facturado a (Cliente)</div>
+          <div style="font-weight:800;font-size:14px;">${escapeHtml(tenant.razonSocial)}</div>
+          <div>RNC / Cédula: <span style="font-family:monospace;">${escapeHtml(tenant.rnc)}</span></div>
+          <div>Correo: ${escapeHtml(tenant.correo)}</div>
+        </div>
+        <div class="box">
+          <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:6px;">Detalles del Documento</div>
+          <div>Fecha Emisión: <strong>${new Date(payment.createdAt).toLocaleDateString('es-DO')}</strong></div>
+          <div>Método / Pasarela: <strong>${escapeHtml(meta.gateway)}</strong></div>
+          ${payment.paidAt ? `<div>Fecha Pago: <strong>${new Date(payment.paidAt).toLocaleDateString('es-DO')}</strong></div>` : ''}
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Descripción de Suscripción</th>
+            <th>Ciclo</th>
+            <th style="text-align:right;">Total (DOP)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:12px 10px;border-bottom:1px solid #e2e8f0;">
+              <strong>Suscripción ANTEK Factura — Plan ${escapeHtml(meta.planCode)}</strong>
+              <div style="font-size:12px;color:#64748b;">Plataforma SaaS de Facturación Electrónica e-CF (Ley 32-23 DGII)</div>
+            </td>
+            <td style="padding:12px 10px;border-bottom:1px solid #e2e8f0;">${meta.billingCycle === 'ANNUAL' ? 'Anual' : 'Mensual'}</td>
+            <td style="padding:12px 10px;border-bottom:1px solid #e2e8f0;text-align:right;font-family:monospace;font-weight:700;">RD$ ${amount.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="totals">
+        <div><span>Subtotal gravado:</span><span style="font-family:monospace;">RD$ ${subtotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span></div>
+        <div><span>ITBIS (18% incluido):</span><span style="font-family:monospace;">RD$ ${itbis.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span></div>
+        <div class="grand"><span>Total DOP:</span><span style="font-family:monospace;">RD$ ${amount.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span></div>
+      </div>
+
+      ${adminNote ? `<div style="margin-top:18px;padding:12px 14px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;color:#1e3a8a;"><strong>Nota de Administración:</strong> ${escapeHtml(adminNote)}</div>` : ''}
+
+      ${!isPaid && settings.bankAccounts.length > 0 ? `
+      <div style="margin-top:22px;">
+        <div style="font-size:12px;font-weight:800;text-transform:uppercase;color:#475569;margin-bottom:8px;">Cuentas Bancarias Autorizadas</div>
+        <table>
+          <thead><tr><th>Banco</th><th>No. Cuenta</th><th>Tipo</th><th>Titular</th></tr></thead>
+          <tbody>${banksHtml}</tbody>
+        </table>
+      </div>` : ''}
+
+      <div class="actions no-print">
+        <button class="btn btn-dark" onclick="window.print()">Imprimir / Guardar PDF</button>
+        ${hasExternalPayUrl ? `<a class="btn btn-primary" href="${escapeHtml(payment.checkoutUrl)}" target="_blank" rel="noreferrer">Abrir Link de Pago</a>` : ''}
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  /**
+   * Webhook de Confirmación (POST /v1/webhooks/payments)
    */
   public async handlePaymentWebhook(
     payload: any,
@@ -294,7 +946,7 @@ export class BillingService {
     planCode: string;
     currentPeriodEnd: Date;
   }> {
-    const gatewayName = payload?.gateway || 'MOCK';
+    const gatewayName = payload?.gateway || 'CARDNET';
     const adapter = PaymentGatewayFactory.getAdapter(gatewayName);
     const verification = adapter.verifyWebhookSignature(payload, signature, secret);
 
@@ -307,157 +959,120 @@ export class BillingService {
     }
 
     const paymentId = verification.paymentId || payload?.paymentId;
-    let payment = paymentId ? this.payments.get(paymentId) : undefined;
+    let payment = paymentId
+      ? await prisma.subscriptionPayment.findUnique({
+          where: { id: paymentId },
+          include: { subscription: { include: { plan: true } } },
+        })
+      : null;
 
-    // Si no se encuentra por paymentId, buscar por gatewayTransactionId o último pendiente
     if (!payment && verification.gatewayTransactionId) {
-      payment = Array.from(this.payments.values()).find(
-        (p) => p.gatewayTransactionId === verification.gatewayTransactionId
-      );
-    }
-    if (!payment) {
-      payment = Array.from(this.payments.values()).find((p) => p.status === 'PENDING');
+      payment = await prisma.subscriptionPayment.findFirst({
+        where: { gatewayTransactionId: verification.gatewayTransactionId },
+        include: { subscription: { include: { plan: true } } },
+      });
     }
 
     if (!payment) {
       throw new NotFoundException(`Transacción de pago no encontrada.`);
     }
 
-    // Si el pago ya fue marcado como PAID, retornar idempotente
     if (payment.status === 'PAID') {
-      const sub = this.subscriptions.get(payment.tenantId)!;
       return {
         success: true,
         paymentId: payment.id,
-        subscriptionId: sub.id,
-        status: sub.status,
-        planCode: sub.planCode,
-        currentPeriodEnd: sub.currentPeriodEnd,
+        subscriptionId: payment.subscriptionId,
+        status: payment.subscription.status,
+        planCode: payment.subscription.plan.code,
+        currentPeriodEnd: payment.subscription.currentPeriodEnd,
       };
     }
 
-    // Marcar el pago como PAID
-    payment.status = 'PAID';
-    payment.paidAt = new Date();
-    if (verification.gatewayTransactionId) {
-      payment.gatewayTransactionId = verification.gatewayTransactionId;
-    }
-
-    // Actualizar la Suscripción
-    const sub = this.subscriptions.get(payment.tenantId);
-    if (!sub) {
-      throw new NotFoundException(`Suscripción no encontrada para el tenant ${payment.tenantId}`);
-    }
-
-    // Si el pago contemplaba un cambio de plan (Upgrade / Downgrade)
-    if (payment.planCode && payment.planCode !== sub.planCode) {
-      const newPlan = this.plans.find((p) => p.code === payment.planCode);
-      if (newPlan) {
-        sub.planId = newPlan.id;
-        sub.planCode = newPlan.code;
-        sub.plan = newPlan;
-        sub.monthlyInvoiceLimit = newPlan.monthlyInvoiceLimit;
-      }
-    }
-
     const now = new Date();
-    const isAnnual = payment.billingCycle === 'ANNUAL';
-    const periodDays = isAnnual ? 365 : 30;
+    const meta = parseGatewayMeta(payment.gateway, payment.subscription.plan.code);
+    const periodDays = meta.billingCycle === 'ANNUAL' ? 365 : 30;
     const newPeriodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
 
-    sub.status = 'ACTIVE';
-    sub.currentPeriodStart = now;
-    sub.currentPeriodEnd = newPeriodEnd;
-    sub.gracePeriodEndsAt = null;
-    sub.invoicesUsedCurrentPeriod = 0; // Reinicio de consumo del período
-    sub.lastPaymentLinkUrl = null;
-    sub.updatedAt = now;
+    await prisma.subscriptionPayment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'PAID',
+        paidAt: now,
+      },
+    });
 
-    // Sincronización atómica inmediata en Supabase PostgreSQL (<3 segundos)
-    try {
-      const planRecord = await prisma.plan.findUnique({ where: { code: sub.planCode } });
-      await prisma.subscription.upsert({
-        where: { tenantId: payment.tenantId },
-        update: {
-          status: 'ACTIVE',
-          planId: planRecord?.id || sub.planId,
-          currentPeriodStart: now,
-          currentPeriodEnd: newPeriodEnd,
-          gracePeriodEndsAt: null,
-          invoicesUsedCurrentPeriod: 0,
-        },
-        create: {
-          tenantId: payment.tenantId,
-          planId: planRecord?.id || sub.planId,
-          status: 'ACTIVE',
-          currentPeriodStart: now,
-          currentPeriodEnd: newPeriodEnd,
-          gracePeriodEndsAt: null,
-          invoicesUsedCurrentPeriod: 0,
-        },
-      });
-      this.logger.log(`[Billing Webhook] Suscripción sincronizada en Supabase PostgreSQL para ${payment.tenantId}`);
-    } catch (dbErr: any) {
-      this.logger.warn(`[Billing Webhook] Aviso sincronización Supabase: ${dbErr.message}`);
-    }
-
-    this.logger.log(
-      `[Billing Webhook] Pago confirmado para ${payment.tenantId}. Suscripción reactivada a ACTIVE hasta ${newPeriodEnd.toISOString()}`
-    );
+    const targetPlan = await prisma.plan.findUnique({ where: { code: meta.planCode } });
+    const updatedSub = await prisma.subscription.update({
+      where: { id: payment.subscriptionId },
+      data: {
+        planId: targetPlan?.id || payment.subscription.planId,
+        status: 'ACTIVE',
+        currentPeriodStart: now,
+        currentPeriodEnd: newPeriodEnd,
+        gracePeriodEndsAt: null,
+        invoicesUsedCurrentPeriod: 0,
+        lastPaymentLinkUrl: null,
+        externalCustomerId: null,
+      },
+      include: { plan: true },
+    });
 
     return {
       success: true,
       paymentId: payment.id,
-      subscriptionId: sub.id,
-      status: sub.status,
-      planCode: sub.planCode,
-      currentPeriodEnd: sub.currentPeriodEnd,
+      subscriptionId: updatedSub.id,
+      status: updatedSub.status,
+      planCode: updatedSub.plan.code,
+      currentPeriodEnd: updatedSub.currentPeriodEnd,
     };
   }
 
   /**
-   * 3. Cron Job de Control de Vencimientos y Días de Gracia
-   * - Paso A (Inicio de gracia): ACTIVE donde currentPeriodEnd < now() -> PAST_DUE, gracePeriodEndsAt = currentPeriodEnd + 5 días
-   * - Paso B (Suspensión): PAST_DUE donde gracePeriodEndsAt < now() -> SUSPENDED
+   * Cron Job de Control de Vencimientos y Días de Gracia en PostgreSQL
    */
-  public evaluateSubscriptionsExpiration(): {
+  public async evaluateSubscriptionsExpiration(): Promise<{
     evaluatedAt: Date;
     movedToPastDue: number;
     movedToSuspended: number;
     totalActive: number;
-  } {
+  }> {
     const now = new Date();
     let movedToPastDue = 0;
     let movedToSuspended = 0;
     let totalActive = 0;
 
-    for (const [tenantId, sub] of this.subscriptions.entries()) {
-      // Paso A: Vencimiento de suscripción activa -> Entrar en plazo de gracia de 5 días
-      if (sub.status === 'ACTIVE') {
-        if (sub.currentPeriodEnd.getTime() < now.getTime()) {
-          sub.status = 'PAST_DUE';
-          // Se otorgan 5 días calendario exactos desde el fin del período
-          sub.gracePeriodEndsAt = new Date(sub.currentPeriodEnd.getTime() + 5 * 24 * 60 * 60 * 1000);
-          sub.updatedAt = now;
-          movedToPastDue++;
-          this.logger.warn(
-            `[Cron Paso A] Suscripción ${sub.id} (Tenant ${tenantId}) venció. Estado -> PAST_DUE con 5 días de gracia hasta ${sub.gracePeriodEndsAt.toISOString()}`
-          );
-        } else {
-          totalActive++;
+    try {
+      const subs = await prisma.subscription.findMany({
+        where: { status: { in: ['ACTIVE', 'PAST_DUE'] } },
+      });
+
+      for (const sub of subs) {
+        if (sub.status === 'ACTIVE') {
+          if (sub.currentPeriodEnd.getTime() < now.getTime()) {
+            const graceEnds = new Date(sub.currentPeriodEnd.getTime() + 5 * 24 * 60 * 60 * 1000);
+            await prisma.subscription.update({
+              where: { id: sub.id },
+              data: {
+                status: 'PAST_DUE',
+                gracePeriodEndsAt: graceEnds,
+              },
+            });
+            movedToPastDue++;
+          } else {
+            totalActive++;
+          }
+        } else if (sub.status === 'PAST_DUE') {
+          if (sub.gracePeriodEndsAt && sub.gracePeriodEndsAt.getTime() < now.getTime()) {
+            await prisma.subscription.update({
+              where: { id: sub.id },
+              data: { status: 'SUSPENDED' },
+            });
+            movedToSuspended++;
+          }
         }
       }
-      // Paso B: Vencimiento de plazo de gracia de 5 días -> Suspensión total
-      else if (sub.status === 'PAST_DUE') {
-        if (sub.gracePeriodEndsAt && sub.gracePeriodEndsAt.getTime() < now.getTime()) {
-          sub.status = 'SUSPENDED';
-          sub.updatedAt = now;
-          movedToSuspended++;
-          this.logger.error(
-            `[Cron Paso B] Plazo de gracia vencido para suscripción ${sub.id} (Tenant ${tenantId}). Estado -> SUSPENDED (Bloqueo de emisión).`
-          );
-        }
-      }
+    } catch (err: any) {
+      this.logger.warn(`[BillingCron] Aviso evaluando expiraciones: ${err?.message || err}`);
     }
 
     return {
@@ -469,18 +1084,16 @@ export class BillingService {
   }
 
   /**
-   * 4. SubscriptionGuard Validator
-   * Valida restricciones antes de emitir e-CF
+   * Valida restricciones del plan antes de emitir e-CF
    */
-  public checkEmissionAllowed(
+  public async checkEmissionAllowed(
     tenantId: string = 'tenant-principal',
     tipoEcf: number,
     isApiKeyRequest: boolean = false
-  ): void {
-    const sub = this.getSubscription(tenantId);
+  ): Promise<void> {
+    const sub = await this.getSubscription(tenantId);
     const plan = sub.plan;
 
-    // Regla 1: Si status === 'SUSPENDED' -> HTTP 402 SUBSCRIPTION_SUSPENDED
     if (sub.status === 'SUSPENDED') {
       throw new HttpException(
         {
@@ -488,7 +1101,7 @@ export class BillingService {
           error: 'PaymentRequired',
           code: 'SUBSCRIPTION_SUSPENDED',
           message:
-            'Tu suscripción está suspendida por falta de pago tras vencer los 5 días de gracia. Genera un Link de Pago para reactivar el servicio de inmediato.',
+            'Tu suscripción está suspendida por falta de pago tras vencer los 5 días de gracia. Genera o abre tu Link de Pago para reactivar el servicio.',
           plan: plan.name,
           paymentLink: sub.lastPaymentLinkUrl,
         },
@@ -496,7 +1109,6 @@ export class BillingService {
       );
     }
 
-    // Regla 2: Límite mensual de comprobantes -> HTTP 402 PLAN_LIMIT_REACHED
     if (sub.invoicesUsedCurrentPeriod >= plan.monthlyInvoiceLimit) {
       throw new HttpException(
         {
@@ -511,14 +1123,13 @@ export class BillingService {
       );
     }
 
-    // Regla 3: Tipos de e-CF permitidos según el plan -> HTTP 403 PLAN_UPGRADE_REQUIRED
-    if (tipoEcf && !plan.allowedEcfTypes.includes(tipoEcf)) {
+    if (tipoEcf && Array.isArray(plan.allowedEcfTypes) && !plan.allowedEcfTypes.includes(tipoEcf)) {
       throw new HttpException(
         {
           statusCode: HttpStatus.FORBIDDEN,
           error: 'Forbidden',
           code: 'PLAN_UPGRADE_REQUIRED',
-          message: `El tipo de comprobante e-CF ${tipoEcf} no está habilitado en el ${plan.name}. Requiere Plan Medio o Plan Pro.`,
+          message: `El tipo de comprobante e-CF ${tipoEcf} no está habilitado en el ${plan.name}. Actualiza tu plan para continuar.`,
           allowedTypes: plan.allowedEcfTypes,
           requestedType: tipoEcf,
         },
@@ -526,65 +1137,64 @@ export class BillingService {
       );
     }
 
-    // Regla 4: Acceso a la API REST pública -> HTTP 403 PLAN_UPGRADE_REQUIRED
     if (isApiKeyRequest && !plan.apiAccess) {
       throw new HttpException(
         {
           statusCode: HttpStatus.FORBIDDEN,
           error: 'Forbidden',
           code: 'PLAN_UPGRADE_REQUIRED',
-          message: `El acceso a la API REST de emisión requiere Plan Medio o Plan Pro. Actualiza tu plan para habilitar integración con tu tienda online o ERP.`,
+          message:
+            'El acceso mediante X-API-Key requiere Plan Medio o Plan Pro. Actualiza tu plan para habilitar integración API.',
         },
         HttpStatus.FORBIDDEN
       );
     }
   }
 
-  /**
-   * Incremento atómico del contador mensual de facturas
-   */
-  public incrementUsage(tenantId: string = 'tenant-principal'): number {
-    const sub = this.subscriptions.get(tenantId);
-    if (sub) {
-      sub.invoicesUsedCurrentPeriod += 1;
-      sub.updatedAt = new Date();
-      return sub.invoicesUsedCurrentPeriod;
+  public async incrementUsage(tenantId: string = 'tenant-principal'): Promise<number> {
+    try {
+      const updated = await prisma.subscription.update({
+        where: { tenantId },
+        data: { invoicesUsedCurrentPeriod: { increment: 1 } },
+      });
+      return updated.invoicesUsedCurrentPeriod;
+    } catch {
+      return 1;
     }
-    return 1;
   }
 
-  public getPaymentHistory(tenantId: string = 'tenant-principal'): PaymentRecord[] {
-    return Array.from(this.payments.values())
-      .filter((p) => p.tenantId === tenantId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  /**
-   * Helper para simular estados de prueba (PAST_DUE, SUSPENDED, ACTIVE) en desarrollo
-   */
-  public simulateSubscriptionStatus(
+  public async simulateSubscriptionStatus(
     tenantId: string = 'tenant-principal',
     status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED',
     graceDaysRemaining: number = 3
-  ): SubscriptionState {
-    this.initDefaultSubscription(tenantId);
-    const sub = this.subscriptions.get(tenantId)!;
-    sub.status = status;
+  ): Promise<SubscriptionState> {
+    const sub = await this.getSubscription(tenantId);
     const now = new Date();
+    let currentPeriodStart = sub.currentPeriodStart;
+    let currentPeriodEnd = sub.currentPeriodEnd;
+    let gracePeriodEndsAt: Date | null = null;
 
     if (status === 'PAST_DUE') {
-      sub.currentPeriodEnd = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000);
-      sub.gracePeriodEndsAt = new Date(now.getTime() + graceDaysRemaining * 24 * 60 * 60 * 1000);
+      currentPeriodEnd = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000);
+      gracePeriodEndsAt = new Date(now.getTime() + graceDaysRemaining * 24 * 60 * 60 * 1000);
     } else if (status === 'SUSPENDED') {
-      sub.currentPeriodEnd = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
-      sub.gracePeriodEndsAt = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+      currentPeriodEnd = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+      gracePeriodEndsAt = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
     } else {
-      sub.currentPeriodStart = now;
-      sub.currentPeriodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-      sub.gracePeriodEndsAt = null;
+      currentPeriodStart = now;
+      currentPeriodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     }
 
-    sub.updatedAt = now;
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: {
+        status: status as SubscriptionStatus,
+        currentPeriodStart,
+        currentPeriodEnd,
+        gracePeriodEndsAt,
+      },
+    });
+
     return this.getSubscription(tenantId);
   }
 }

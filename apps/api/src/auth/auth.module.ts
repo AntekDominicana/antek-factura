@@ -8,7 +8,7 @@ import { CryptoService } from '../common/crypto.service';
   imports: [
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'super_secret_jwt_key_dominicana_ecf_change_me_in_prod',
-      signOptions: { expiresIn: '15m' },
+      signOptions: { expiresIn: '7d' },
     }),
   ],
   controllers: [AuthController],

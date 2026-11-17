@@ -1,10 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { PublicNavbar } from '../components/PublicNavbar';
 import { PublicFooter } from '../components/PublicFooter';
-import { AntekLogo } from '../components/AntekLogo';
+import { API_BASE_URL } from '../lib/api';
 import {
   ShieldCheck,
   Zap,
@@ -22,7 +22,56 @@ import {
   ExternalLink,
 } from 'lucide-react';
 
+const FALLBACK_PUBLIC_PLANS = [
+  {
+    code: 'BASIC',
+    name: 'Plan Básico',
+    description: 'Microempresas y profesionales independientes',
+    priceDop: 990,
+    monthlyInvoiceLimit: 100,
+    maxUsers: 2,
+    maxBranches: 1,
+    allowedEcfTypes: [31, 32],
+    apiAccess: false,
+  },
+  {
+    code: 'MEDIUM',
+    name: 'Plan Medio',
+    description: 'Comercios en crecimiento y restaurantes',
+    priceDop: 2450,
+    monthlyInvoiceLimit: 600,
+    maxUsers: 5,
+    maxBranches: 3,
+    allowedEcfTypes: [31, 32, 33, 34, 44, 45],
+    apiAccess: true,
+  },
+  {
+    code: 'PRO',
+    name: 'Plan Pro',
+    description: 'Corporaciones y cadenas multi-sucursal',
+    priceDop: 4900,
+    monthlyInvoiceLimit: 3000,
+    maxUsers: 25,
+    maxBranches: 10,
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47],
+    apiAccess: true,
+  },
+];
+
 export default function HomePage() {
+  const [plans, setPlans] = useState<any[]>(FALLBACK_PUBLIC_PLANS);
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/v1/billing/plans`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.plans && Array.isArray(data.plans) && data.plans.length > 0) {
+          setPlans(data.plans);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-sky-500 selection:text-white">
       <PublicNavbar />
@@ -62,10 +111,10 @@ export default function HomePage() {
                 <ArrowRight className="w-5 h-5" />
               </Link>
               <Link
-                href="/app/dashboard"
+                href="/login"
                 className="px-6 py-3.5 rounded-2xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-base border border-slate-800 transition flex items-center gap-2"
               >
-                <span>Ver Portal en Vivo (Demo)</span>
+                <span>Iniciar Sesión en el Portal</span>
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </Link>
             </div>
@@ -113,7 +162,7 @@ export default function HomePage() {
                 </div>
                 <h4 className="text-lg font-bold text-white">Emisión e-CF con Tu Logo</h4>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Genera comprobantes oficiales (E31, E32, E33, E34, E41) con el logo de tu empresa (ej. <em>Juan Pérez SRL</em>) y el aval de <strong>ANTEK Factura</strong> estilo Alegra en formato Hoja Carta o Tirilla 80mm.
+                  Genera comprobantes oficiales (E31, E32, E33, E34, E41) con el logo de tu empresa y el aval de <strong>ANTEK Factura</strong> en formato Hoja Carta o Tirilla 80mm.
                 </p>
               </div>
 
@@ -254,134 +303,69 @@ export default function HomePage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-              {/* Plan Básico */}
-              <div className="p-8 rounded-3xl bg-slate-950 border border-slate-800 space-y-6 flex flex-col justify-between">
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="text-lg font-bold text-white">Plan Básico</h4>
-                    <p className="text-xs text-slate-400">Microempresas y profesionales independientes</p>
+              {plans.map((p: any) => {
+                const isPopular = p.code === 'MEDIUM';
+                return (
+                  <div
+                    key={p.code}
+                    className={`p-8 rounded-3xl space-y-6 flex flex-col justify-between relative ${
+                      isPopular
+                        ? 'bg-slate-900 border-2 border-sky-500 shadow-2xl shadow-sky-500/10'
+                        : 'bg-slate-950 border border-slate-800'
+                    }`}
+                  >
+                    {isPopular && (
+                      <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-gradient-to-r from-sky-500 to-indigo-600 text-[10px] font-black uppercase tracking-wider text-white shadow-md">
+                        Más Popular
+                      </div>
+                    )}
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="text-lg font-bold text-white">{p.name}</h4>
+                        <p className="text-xs text-slate-400">{p.description}</p>
+                      </div>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-3xl font-black text-white">
+                          RD$ {Number(p.priceDop || 0).toLocaleString('es-DO')}
+                        </span>
+                        <span className="text-xs text-slate-500 font-semibold">/ mes</span>
+                      </div>
+                      <ul className="space-y-2.5 text-xs text-slate-300">
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          Hasta {Number(p.monthlyInvoiceLimit || 100).toLocaleString('es-DO')} comprobantes e-CF / mes
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          e-CF habilitados: {Array.isArray(p.allowedEcfTypes) ? p.allowedEcfTypes.join(', ') : '31, 32'}
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          Hasta {p.maxUsers || 2} usuarios y {p.maxBranches || 1} sucursales
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          {p.apiAccess ? 'Acceso a API REST y Webhooks en vivo' : 'Emisión desde Portal Web + QR'}
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          5 días calendario de gracia garantizados
+                        </li>
+                      </ul>
+                    </div>
+                    <Link
+                      href={`/register?plan=${p.code}`}
+                      className={`w-full py-3 rounded-xl font-bold text-xs text-center block transition ${
+                        isPopular
+                          ? 'bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white shadow-lg shadow-sky-500/25'
+                          : 'bg-slate-900 hover:bg-slate-800 text-white border border-slate-700'
+                      }`}
+                    >
+                      Seleccionar {p.name}
+                    </Link>
                   </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-white">RD$ 990</span>
-                    <span className="text-xs text-slate-500 font-semibold">/ mes</span>
-                  </div>
-                  <ul className="space-y-2.5 text-xs text-slate-300">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Hasta 100 comprobantes e-CF / mes
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      e-CF 31 (Crédito Fiscal) y 32 (Consumo)
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Hasta 2 usuarios y 1 sucursal
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Logo personalizado con compresión
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      5 días calendario de gracia garantizados
-                    </li>
-                  </ul>
-                </div>
-                <Link
-                  href="/register?plan=BASIC"
-                  className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs text-center border border-slate-700 block transition"
-                >
-                  Seleccionar Plan Básico
-                </Link>
-              </div>
-
-              {/* Plan Medio (Destacado) */}
-              <div className="p-8 rounded-3xl bg-slate-900 border-2 border-sky-500 space-y-6 flex flex-col justify-between relative shadow-2xl shadow-sky-500/10">
-                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-gradient-to-r from-sky-500 to-indigo-600 text-[10px] font-black uppercase tracking-wider text-white shadow-md">
-                  Más Popular
-                </div>
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="text-lg font-bold text-white">Plan Medio</h4>
-                    <p className="text-xs text-slate-400">Comercios en crecimiento y restaurantes</p>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-white">RD$ 2,450</span>
-                    <span className="text-xs text-slate-500 font-semibold">/ mes</span>
-                  </div>
-                  <ul className="space-y-2.5 text-xs text-slate-300">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                      Hasta 600 comprobantes e-CF / mes
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                      e-CF 31, 32, 33, 34, 44, 45 habilitados
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                      Acceso a API REST y Webhooks en vivo
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                      Hasta 5 usuarios y 3 sucursales
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-                      5 días calendario de gracia garantizados
-                    </li>
-                  </ul>
-                </div>
-                <Link
-                  href="/register?plan=MEDIUM"
-                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs text-center shadow-lg shadow-sky-500/25 block transition"
-                >
-                  Seleccionar Plan Medio
-                </Link>
-              </div>
-
-              {/* Plan Pro */}
-              <div className="p-8 rounded-3xl bg-slate-950 border border-slate-800 space-y-6 flex flex-col justify-between">
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="text-lg font-bold text-white">Plan Pro</h4>
-                    <p className="text-xs text-slate-400">Corporaciones y cadenas multi-sucursal</p>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-3xl font-black text-white">RD$ 4,900</span>
-                    <span className="text-xs text-slate-500 font-semibold">/ mes</span>
-                  </div>
-                  <ul className="space-y-2.5 text-xs text-slate-300">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Hasta 3,000 comprobantes e-CF / mes
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Gama total e-CF DGII (31 al 47)
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Hasta 25 usuarios y 10 sucursales
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Emisión masiva API y multimoneda
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      5 días calendario de gracia garantizados
-                    </li>
-                  </ul>
-                </div>
-                <Link
-                  href="/register?plan=PRO"
-                  className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs text-center border border-slate-700 block transition"
-                >
-                  Seleccionar Plan Pro
-                </Link>
-              </div>
+                );
+              })}
             </div>
           </div>
         </section>

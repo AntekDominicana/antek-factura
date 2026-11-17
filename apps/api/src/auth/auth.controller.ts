@@ -76,7 +76,16 @@ export class AuthController {
 
     try {
       return this.jwtService.verify(token);
-    } catch {
+    } catch (verifyErr: any) {
+      if (verifyErr?.name === 'TokenExpiredError') {
+        try {
+          const candidate: any = this.jwtService.verify(token, { ignoreExpiration: true });
+          const issuedAt = Number(candidate?.iat || 0);
+          if (issuedAt > 0 && Math.floor(Date.now() / 1000) - issuedAt <= 7 * 86400) {
+            return candidate;
+          }
+        } catch {}
+      }
       throw new UnauthorizedException('Token de sesión expirado o inválido.');
     }
   }
@@ -155,7 +164,7 @@ export class AuthController {
       secure: true, // Forzar Secure por HTTPS
       sameSite: sameSitePolicy,
       domain: cookieDomain,
-      maxAge: 15 * 60 * 1000, // 15 minutos
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
       path: '/',
     });
 
@@ -197,7 +206,7 @@ export class AuthController {
       secure: isProd || Boolean(cookieDomain),
       sameSite: sameSitePolicy,
       domain: cookieDomain,
-      maxAge: 15 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
       path: '/',
     });
 

@@ -49,6 +49,15 @@ export async function POST(request: Request) {
       maxAge: 60 * 60 * 24 * 7, // 7 días
     });
 
+    response.cookies.set('antek_client_token', data.accessToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production' || Boolean(cookieDomain),
+      sameSite: sameSitePolicy,
+      domain: cookieDomain,
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
+    });
+
     return response;
   } catch (error: any) {
     return NextResponse.json(
