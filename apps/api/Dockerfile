@@ -17,8 +17,8 @@ COPY packages/database/package.json ./packages/database/
 COPY packages/fiscal-engine/package.json ./packages/fiscal-engine/
 COPY apps/api/package.json ./apps/api/
 
-# Instalar dependencias
-RUN pnpm install --frozen-lockfile
+# Instalar dependencias permitiendo build scripts de Prisma y bcrypt
+RUN pnpm install --no-frozen-lockfile
 
 # Copiar código fuente
 COPY packages/database ./packages/database
@@ -26,7 +26,7 @@ COPY packages/fiscal-engine ./packages/fiscal-engine
 COPY apps/api ./apps/api
 
 # Generar Prisma Client
-RUN pnpm --filter @factura-ecf/database exec prisma generate
+RUN cd packages/database && npx prisma generate
 
 # Compilar librerías y API
 RUN pnpm --filter @factura-ecf/fiscal-engine run build
