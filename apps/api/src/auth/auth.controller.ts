@@ -9,11 +9,46 @@ import {
   HttpCode,
   HttpStatus,
   UnauthorizedException,
+  HttpException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+
+// Limitador de intentos en memoria por IP/Usuario (Anti-Fuerza Bruta)
+const loginAttemptTracker = new Map<string, { count: number; firstAttempt: number }>();
+
+function checkRateLimit(key: string, maxAttempts = 5, windowMs = 15 * 60 * 1000): void {
+  const now = Date.now();
+  const entry = loginAttemptTracker.get(key);
+
+  if (!entry) {
+    loginAttemptTracker.set(key, { count: 1, firstAttempt: now });
+    return;
+  }
+
+  if (now - entry.firstAttempt > windowMs) {
+    loginAttemptTracker.set(key, { count: 1, firstAttempt: now });
+    return;
+  }
+
+  if (entry.count >= maxAttempts) {
+    const remainingMin = Math.ceil((windowMs - (now - entry.firstAttempt)) / (60 * 1000));
+    throw new HttpException(
+      `Demasiados intentos fallidos. Su acceso ha sido bloqueado temporalmente por ${remainingMin} minuto(s) por seguridad.`,
+      HttpStatus.TOO_MANY_REQUESTS
+    );
+  }
+
+  entry.count++;
+}
+
+function resetRateLimit(key: string): void {
+  loginAttemptTracker.delete(key);
+}
 
 @ApiTags('Autenticación, Sesiones & Seguridad')
 @Controller(['auth', 'v1/auth'])
@@ -45,35 +80,34 @@ export class AuthController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Registro de nuevo contribuyente y usuario administrador' })
-  async register(
-    @Body()
-    body: {
-      rnc: string;
-      razonSocial: string;
-      nombreComercial?: string;
-      direccion: string;
-      correo: string;
-      fullName: string;
-      password: string;
-      planCode?: string;
-    }
-  ) {
+  @ApiOperation({ summary: 'Registro de nuevo contribuyente y usuario administrador con validación estricta' })
+  async register(@Body() body: RegisterDto) {
     return this.authService.register(body);
   }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Inicio de sesión seguro con emisión de cookies HttpOnly' })
+  @ApiOperation({ summary: 'Inicio de sesión seguro con protección contra fuerza bruta y cookies HttpOnly' })
   async login(
-    @Body() body: { email: string; password: string; totpCode?: string },
+    @Body() body: LoginDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
     const userAgent = req.headers['user-agent'];
-    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    const rateLimitKey = `login:${ipAddress}:${body.email.toLowerCase()}`;
 
-    const result = await this.authService.login(body, { userAgent, ipAddress });
+    // Validar límite de intentos antes de procesar
+    checkRateLimit(rateLimitKey, 5, 15 * 60 * 1000);
+
+    let result;
+    try {
+      result = await this.authService.login(body, { userAgent, ipAddress });
+      // Si el login fue exitoso, resetear contador de intentos
+      resetRateLimit(rateLimitKey);
+    } catch (err) {
+      throw err;
+    }
 
     if (result.requires2fa) {
       return result;
@@ -83,10 +117,10 @@ export class AuthController {
     const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
     const sameSitePolicy = cookieDomain ? ('none' as const) : ('lax' as const);
 
-    // Cookies seguras HttpOnly con soporte cross-domain (.antek.com.do)
+    // Cookies blindadas HttpOnly y Secure
     res.cookie('access_token', result.accessToken, {
       httpOnly: true,
-      secure: isProd || Boolean(cookieDomain),
+      secure: true, // Forzar Secure por HTTPS
       sameSite: sameSitePolicy,
       domain: cookieDomain,
       maxAge: 15 * 60 * 1000, // 15 minutos
@@ -95,7 +129,7 @@ export class AuthController {
 
     res.cookie('refresh_token', result.refreshToken, {
       httpOnly: true,
-      secure: isProd || Boolean(cookieDomain),
+      secure: true, // Forzar Secure por HTTPS
       sameSite: sameSitePolicy,
       domain: cookieDomain,
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días

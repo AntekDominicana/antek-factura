@@ -44,18 +44,42 @@ export class TenantAuthGuard implements CanActivate {
     if (token) {
       try {
         const decoded = this.jwtService.verify(token);
-        if (decoded && decoded.tenantId) {
+        if (decoded && (decoded.sub || decoded.userId)) {
+          const userId = decoded.sub || decoded.userId;
+
+          // REVISIÓN DE PERMISOS EN CADA PETICIÓN (Live DB Check):
+          // Verifica en tiempo real que el usuario no haya sido desactivado o bloqueado
+          const liveUser = await prisma.tenantUser.findUnique({
+            where: { id: userId },
+            include: { tenant: true },
+          });
+
+          if (!liveUser || !liveUser.isActive) {
+            throw new UnauthorizedException('La cuenta de usuario está desactivada o ha sido eliminada.');
+          }
+
+          if (liveUser.lockedUntil && liveUser.lockedUntil > new Date()) {
+            throw new UnauthorizedException('La cuenta se encuentra bloqueada temporalmente por intentos fallidos.');
+          }
+
+          if (!liveUser.tenant) {
+            throw new UnauthorizedException('La cuenta de la empresa no fue encontrada.');
+          }
+
           authContext = {
-            userId: decoded.sub || decoded.userId,
-            email: decoded.email,
-            role: decoded.role,
-            tenantId: decoded.tenantId,
-            environment: decoded.environment || 'SANDBOX',
+            userId: liveUser.id,
+            email: liveUser.email,
+            role: liveUser.role,
+            tenantId: liveUser.tenantId,
+            environment: (liveUser.tenant?.environment as 'SANDBOX' | 'PRODUCTION') || decoded.environment || 'SANDBOX',
             authType: 'JWT',
           };
         }
-      } catch (err) {
-        // Si el JWT es inválido o expiró, no es un contexto de usuario válido
+      } catch (err: any) {
+        if (err instanceof UnauthorizedException) {
+          throw err;
+        }
+        // Token inválido o expirado
       }
     }
 
@@ -84,7 +108,7 @@ export class TenantAuthGuard implements CanActivate {
           include: { tenant: true },
         });
 
-        if (apiKeyRecord && apiKeyRecord.isActive) {
+        if (apiKeyRecord && apiKeyRecord.isActive && apiKeyRecord.tenant) {
           authContext = {
             tenantId: apiKeyRecord.tenantId,
             environment: apiKeyRecord.environment as 'SANDBOX' | 'PRODUCTION',
@@ -99,16 +123,24 @@ export class TenantAuthGuard implements CanActivate {
       }
     }
 
-    // Caso C: Fallback para desarrollo / endpoints internos con tenant por defecto
+    // Caso C: Rechazo estricto si no hay credenciales válidas
     if (!authContext) {
-      // Buscar tenant principal existente en BD
+      if (process.env.NODE_ENV === 'production') {
+        throw new UnauthorizedException('Acceso no autorizado: Debe enviar un Bearer token válido o X-API-Key.');
+      }
+
+      // Solo en desarrollo local offline:
       const defaultTenant = await prisma.tenant.findFirst({
         select: { id: true, environment: true },
       });
 
+      if (!defaultTenant) {
+        throw new UnauthorizedException('No hay organizaciones disponibles.');
+      }
+
       authContext = {
-        tenantId: defaultTenant?.id || 'tenant-principal',
-        environment: (defaultTenant?.environment as 'SANDBOX' | 'PRODUCTION') || 'SANDBOX',
+        tenantId: defaultTenant.id,
+        environment: (defaultTenant.environment as 'SANDBOX' | 'PRODUCTION') || 'SANDBOX',
         authType: 'SYSTEM',
       };
     }
