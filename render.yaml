@@ -7,7 +7,7 @@ services:
     env: docker
     dockerfilePath: apps/api/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     region: oregon
     healthCheckPath: /v1/health
     envVars:
@@ -44,7 +44,7 @@ services:
   # ==============================================================================
   - type: redis
     name: antek-redis
-    plan: starter
+    plan: free
     region: oregon
     maxmemoryPolicy: noeviction
     ipAllowList: [] # Solo accesible internamente por la API
