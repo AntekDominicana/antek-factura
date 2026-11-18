@@ -40,7 +40,11 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.message || 'Credenciales inválidas.');
+        console.error('[Login] Auth failed:', res.status, data?.message);
+        if (res.status === 401 || res.status === 400) {
+          throw new Error('Correo o contraseña incorrectos.');
+        }
+        throw new Error('No pudimos iniciar sesión. Inténtalo de nuevo.');
       }
 
       if (data.user) {
@@ -72,7 +76,12 @@ export default function LoginPage() {
         router.push(isRootAdmin ? '/superadmin' : '/app/dashboard');
       }
     } catch (err: any) {
-      setError(err.message || 'Error al iniciar sesión. Verifica tus credenciales.');
+      console.error('[Login] Error:', err);
+      const safeMessage =
+        err?.message === 'Correo o contraseña incorrectos.'
+          ? 'Correo o contraseña incorrectos.'
+          : 'No pudimos iniciar sesión. Inténtalo de nuevo.';
+      setError(safeMessage);
     } finally {
       setLoading(false);
     }
