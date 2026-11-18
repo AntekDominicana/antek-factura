@@ -161,6 +161,22 @@ body {
   }
 }
 
+::placeholder {
+  color: #7d8aa3 !important;
+  opacity: 1;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.comparison-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 @media print {
   .no-print {
     display: none !important;
