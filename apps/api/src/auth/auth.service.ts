@@ -246,7 +246,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('El correo o usuario no está registrado en la base de datos de Supabase.');
+      throw new UnauthorizedException('Correo o contraseña incorrectos.');
     }
 
     if (!user.isActive) {
@@ -279,7 +279,7 @@ export class AuthService {
         },
       });
 
-      throw new UnauthorizedException('Credenciales inválidas.');
+      throw new UnauthorizedException('Correo o contraseña incorrectos.');
     }
 
     // Si tiene 2FA habilitado y no envió el código

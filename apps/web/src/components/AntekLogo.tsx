@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useId } from 'react';
 
 interface AntekLogoProps {
   className?: string;
@@ -15,6 +15,13 @@ export function AntekLogo({
   size = 'md',
   theme = 'auto',
 }: AntekLogoProps) {
+  const rawUid = useId();
+  const uid = rawUid.replace(/:/g, '');
+  const pillarTopId = `antekPillarTop-${uid}`;
+  const facetRightId = `antekFacetRight-${uid}`;
+  const baseTrapezoidId = `antekBaseTrapezoid-${uid}`;
+  const edgeGlowId = `antekEdgeGlow-${uid}`;
+
   const sizeMap = {
     sm: { height: 28, emblemSize: 28, textClass: 'text-sm', subText: 'text-[8px]' },
     md: { height: 38, emblemSize: 36, textClass: 'text-base', subText: 'text-[9px]' },
@@ -36,28 +43,28 @@ export function AntekLogo({
     >
       <defs>
         {/* Gradiente azul eléctrico del pilar superior */}
-        <linearGradient id="antekPillarTop" x1="20" y1="90" x2="65" y2="20" gradientUnits="userSpaceOnUse">
+        <linearGradient id={pillarTopId} x1="20" y1="90" x2="65" y2="20" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#0369a1" />
           <stop offset="45%" stopColor="#0ea5e9" />
           <stop offset="100%" stopColor="#38bdf8" />
         </linearGradient>
 
         {/* Gradiente de faceta 3D angular derecha */}
-        <linearGradient id="antekFacetRight" x1="65" y1="20" x2="110" y2="95" gradientUnits="userSpaceOnUse">
+        <linearGradient id={facetRightId} x1="65" y1="20" x2="110" y2="95" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#38bdf8" />
           <stop offset="40%" stopColor="#0284c7" />
           <stop offset="100%" stopColor="#0c4a6e" />
         </linearGradient>
 
         {/* Gradiente de prisma biselado inferior */}
-        <linearGradient id="antekBaseTrapezoid" x1="45" y1="65" x2="105" y2="85" gradientUnits="userSpaceOnUse">
+        <linearGradient id={baseTrapezoidId} x1="45" y1="65" x2="105" y2="85" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#00d8ff" />
           <stop offset="60%" stopColor="#0284c7" />
           <stop offset="100%" stopColor="#0369a1" />
         </linearGradient>
 
         {/* Brillo de neón superior */}
-        <linearGradient id="antekEdgeGlow" x1="65" y1="18" x2="18" y2="92" gradientUnits="userSpaceOnUse">
+        <linearGradient id={edgeGlowId} x1="65" y1="18" x2="18" y2="92" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
           <stop offset="30%" stopColor="#7dd3fc" stopOpacity="0.7" />
           <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
@@ -70,25 +77,25 @@ export function AntekLogo({
       {/* Pilar Primario Izquierdo (Brazo ascendente con corte limpio) */}
       <path
         d="M 64 22 L 20 98 L 42 98 L 64 56 L 86 98 L 108 98 L 64 22 Z"
-        fill="url(#antekPillarTop)"
+        fill={`url(#${pillarTopId})`}
       />
 
       {/* Faceta 3D Lateral Derecha (Profundidad isométrica) */}
       <path
         d="M 64 22 L 86 98 L 110 98 L 64 22 Z"
-        fill="url(#antekFacetRight)"
+        fill={`url(#${facetRightId})`}
       />
 
       {/* Bloque geométrico inferior inclinado (Trapezoide estilo ANTEK) */}
       <path
         d="M 44 68 L 94 68 L 84 84 L 34 84 Z"
-        fill="url(#antekBaseTrapezoid)"
+        fill={`url(#${baseTrapezoidId})`}
       />
 
       {/* Borde biselado con resplandor (Neon Edge) */}
       <path
         d="M 64 22 L 20 98 L 24 98 L 64 26 L 104 98 L 108 98 L 64 22 Z"
-        fill="url(#antekEdgeGlow)"
+        fill={`url(#${edgeGlowId})`}
       />
 
       {/* Punto de luz en el vértice superior */}

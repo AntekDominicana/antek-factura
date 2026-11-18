@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../../../../context/AppContext';
@@ -50,6 +50,17 @@ export default function NewInvoicePage() {
   const [emitting, setEmitting] = useState(false);
   const [emittedResult, setEmittedResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [catalogProducts, setCatalogProducts] = useState<any[]>([]);
+  const [catalogCustomers, setCatalogCustomers] = useState<any[]>([]);
+
+  useEffect(() => {
+    apiFetch<any>('/v1/products')
+      .then((res) => setCatalogProducts(Array.isArray(res) ? res : res?.products || []))
+      .catch(() => {});
+    apiFetch<any>('/v1/customers')
+      .then((res) => setCatalogCustomers(Array.isArray(res) ? res : res?.customers || []))
+      .catch(() => {});
+  }, []);
 
   // Draft invoice for preview
   const draftInvoice = useMemo(() => {
@@ -117,10 +128,21 @@ export default function NewInvoicePage() {
     setItems(next);
   };
 
-  const handleEmit = async () => {
+  const cleanBuyerRnc = rncComprador.replace(/\D/g, '');
+  const isBuyerRncValidForE31 =
+    tipoEcf !== 31 || ([9, 11].includes(cleanBuyerRnc.length) && razonSocialComprador.trim().length > 0);
+  const hasValidItems = items.some(
+    (it) =>
+      String(it?.nombreItem || '').trim().length > 0 &&
+      Number(it?.precioUnitarioItem) > 0 &&
+      Number(it?.cantidadItem) > 0
+  );
+  const canEmit = !emitting && isBuyerRncValidForE31 && hasValidItems;
+
+  const handleEmit = useCallback(async () => {
     setError(null);
-    if (tipoEcf === 31 && (!rncComprador.trim() || !razonSocialComprador.trim())) {
-      setError('La Factura de Crédito Fiscal (e-CF 31) requiere RNC y Razón Social del receptor.');
+    if (tipoEcf === 31 && (![9, 11].includes(cleanBuyerRnc.length) || !razonSocialComprador.trim())) {
+      setError('La Factura de Crédito Fiscal (e-CF 31) exige un RNC/Cédula válido (9 u 11 dígitos) y Razón Social del receptor.');
       return;
     }
 
@@ -161,7 +183,24 @@ export default function NewInvoicePage() {
     } finally {
       setEmitting(false);
     }
-  };
+  }, [tipoEcf, cleanBuyerRnc, rncComprador, razonSocialComprador, items, tipoPago, formaPago, fechaLimitePago]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (canEmit) handleEmit();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setItems((prev) => [
+          ...prev,
+          { nombreItem: '', cantidadItem: 1, precioUnitarioItem: 0, indicadorFacturacion: 1 },
+        ]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [canEmit, handleEmit]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -182,9 +221,9 @@ export default function NewInvoicePage() {
         {/* Formulario Izquierda (7 cols) */}
         <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 sm:p-6 space-y-6">
           <div>
-            <h1 className="text-xl font-black text-slate-900">Emisor de Factura Electrónica (e-CF)</h1>
+            <h2 className="text-base font-black text-slate-900">Datos del Comprobante</h2>
             <p className="text-xs text-slate-500">
-              Timbrado oficial DGII Ley 32-23 con firma digital XMLDSig y validación RNC
+              Timbrado compatible con e-CF Ley 32-23, firma digital XMLDSig y validación RNC
             </p>
           </div>
 
@@ -240,30 +279,59 @@ export default function NewInvoicePage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">RNC o Cédula Receptor</label>
+                <label className="block text-slate-600 font-semibold mb-1">
+                  RNC o Cédula Receptor {tipoEcf === 31 && <span className="text-rose-600">*</span>}
+                </label>
                 <input
                   type="text"
+                  list="customers-rnc-list"
                   value={rncComprador}
                   onChange={(e) => {
-                    setRncComprador(e.target.value);
-                    handleVerifyBuyerRnc(e.target.value);
+                    const val = e.target.value;
+                    setRncComprador(val);
+                    const matchedCustomer = catalogCustomers.find(
+                      (c) => String(c.rnc || '').replace(/\D/g, '') === val.replace(/\D/g, '')
+                    );
+                    if (matchedCustomer?.razonSocial) {
+                      setRazonSocialComprador(matchedCustomer.razonSocial);
+                    }
+                    handleVerifyBuyerRnc(val);
                   }}
-                  placeholder="9 u 11 dígitos"
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono"
+                  placeholder={tipoEcf === 31 ? 'Obligatorio (9 u 11 dígitos)' : 'Opcional (Consumidor Final)'}
+                  className={`w-full bg-white border rounded-xl px-3 py-2 text-xs font-mono ${
+                    tipoEcf === 31 && ![9, 11].includes(cleanBuyerRnc.length)
+                      ? 'border-amber-400 focus:border-amber-500'
+                      : 'border-slate-300'
+                  }`}
                 />
+                <datalist id="customers-rnc-list">
+                  {catalogCustomers.map((c) => (
+                    <option key={c.id || c.rnc} value={c.rnc}>
+                      {c.razonSocial}
+                    </option>
+                  ))}
+                </datalist>
               </div>
 
               <div>
-                <label className="block text-slate-600 font-semibold mb-1">Razón Social Receptor</label>
+                <label className="block text-slate-600 font-semibold mb-1">
+                  Razón Social Receptor {tipoEcf === 31 && <span className="text-rose-600">*</span>}
+                </label>
                 <input
                   type="text"
                   value={razonSocialComprador}
                   onChange={(e) => setRazonSocialComprador(e.target.value)}
-                  placeholder="Nombre de empresa o cliente"
+                  placeholder={tipoEcf === 31 ? 'Nombre o Razón Social obligatoria' : 'Consumidor Final'}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs"
                 />
               </div>
             </div>
+
+            {tipoEcf === 31 && !isBuyerRncValidForE31 && (
+              <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                El e-CF 31 (Crédito Fiscal) exige RNC válido (9 u 11 dígitos) y Razón Social del receptor. Para ventas sin RNC cambia a e-CF 32 (Consumo).
+              </p>
+            )}
 
             {rncChecked && (
               <div className="p-2 rounded-lg bg-emerald-100/70 border border-emerald-300 text-[11px] text-emerald-950 flex items-center justify-between">
@@ -286,77 +354,129 @@ export default function NewInvoicePage() {
               </button>
             </div>
 
-            <div className="space-y-2.5">
-              {items.map((item, index) => (
-                <div key={index} className="p-3 rounded-xl border border-slate-200 bg-white grid grid-cols-12 gap-2 text-xs items-center">
-                  <div className="col-span-5">
-                    <input
-                      type="text"
-                      placeholder="Descripción del bien o servicio"
-                      value={item.nombreItem}
-                      onChange={(e) => handleItemChange(index, 'nombreItem', e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder="Cant."
-                      value={item.cantidadItem}
-                      onChange={(e) => handleItemChange(index, 'cantidadItem', Number(e.target.value))}
-                      className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-right font-mono"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Precio"
-                      value={item.precioUnitarioItem}
-                      onChange={(e) => handleItemChange(index, 'precioUnitarioItem', Number(e.target.value))}
-                      className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-right font-mono"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <select
-                      value={item.indicadorFacturacion}
-                      onChange={(e) => handleItemChange(index, 'indicadorFacturacion', Number(e.target.value))}
-                      className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-[11px]"
-                    >
-                      <option value={1}>18% ITBIS</option>
-                      <option value={2}>16% ITBIS</option>
-                      <option value={3}>0% ITBIS</option>
-                      <option value={4}>Exento</option>
-                    </select>
-                  </div>
-                  <div className="col-span-1 text-right">
-                    <button
-                      type="button"
-                      disabled={items.length <= 1}
-                      onClick={() => handleRemoveItem(index)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 disabled:opacity-30"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
+            <datalist id="products-catalog-list">
+              {catalogProducts.map((prod) => (
+                <option key={prod.id || prod.name} value={prod.name || prod.nombre}>
+                  {formatDOP(Number(prod.unitPrice || prod.precio || 0))}
+                </option>
               ))}
+            </datalist>
+
+            <div className="hidden sm:grid grid-cols-12 gap-2 px-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <div className="col-span-4">Descripción</div>
+              <div className="col-span-2 text-right">Cant.</div>
+              <div className="col-span-2 text-right">Precio</div>
+              <div className="col-span-2">ITBIS</div>
+              <div className="col-span-2 text-right">Total</div>
+            </div>
+
+            <div className="space-y-2.5">
+              {items.map((item, index) => {
+                const rate =
+                  item.indicadorFacturacion === 1 ? 0.18 : item.indicadorFacturacion === 2 ? 0.16 : 0;
+                const lineTotal =
+                  (Number(item.cantidadItem) || 0) *
+                  (Number(item.precioUnitarioItem) || 0) *
+                  (1 + rate);
+
+                return (
+                  <div key={index} className="p-3 rounded-xl border border-slate-200 bg-white grid grid-cols-12 gap-2 text-xs items-center">
+                    <div className="col-span-12 sm:col-span-4">
+                      <input
+                        type="text"
+                        list="products-catalog-list"
+                        placeholder="Descripción del bien o servicio"
+                        value={item.nombreItem}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const matchedProd = catalogProducts.find(
+                            (p) => (p.name || p.nombre || '').toLowerCase() === val.trim().toLowerCase()
+                          );
+                          if (matchedProd) {
+                            const next = [...items];
+                            next[index] = {
+                              ...next[index],
+                              nombreItem: val,
+                              precioUnitarioItem: Number(matchedProd.unitPrice ?? matchedProd.precio ?? next[index].precioUnitarioItem),
+                              indicadorFacturacion: Number(matchedProd.taxRate ?? matchedProd.indicadorFacturacion ?? 1),
+                            };
+                            setItems(next);
+                          } else {
+                            handleItemChange(index, 'nombreItem', val);
+                          }
+                        }}
+                        className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div className="col-span-3 sm:col-span-2">
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder="Cant."
+                        value={item.cantidadItem}
+                        onChange={(e) => handleItemChange(index, 'cantidadItem', Number(e.target.value))}
+                        className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs text-right font-mono"
+                      />
+                    </div>
+                    <div className="col-span-4 sm:col-span-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="Precio"
+                        value={item.precioUnitarioItem}
+                        onChange={(e) => handleItemChange(index, 'precioUnitarioItem', Number(e.target.value))}
+                        className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs text-right font-mono"
+                      />
+                    </div>
+                    <div className="col-span-3 sm:col-span-2">
+                      <select
+                        value={item.indicadorFacturacion}
+                        onChange={(e) => handleItemChange(index, 'indicadorFacturacion', Number(e.target.value))}
+                        className="w-full rounded-lg border border-slate-300 px-1.5 py-1.5 text-[11px]"
+                      >
+                        <option value={1}>18%</option>
+                        <option value={2}>16%</option>
+                        <option value={3}>0%</option>
+                        <option value={4}>Exento</option>
+                      </select>
+                    </div>
+                    <div className="col-span-2 flex items-center justify-end gap-1">
+                      <span className="font-mono font-bold text-slate-800 text-[11px] truncate">
+                        {formatDOP(lineTotal)}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={items.length <= 1}
+                        onClick={() => handleRemoveItem(index)}
+                        className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-30 shrink-0"
+                        title="Eliminar línea"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* Botón de Timbrado */}
-          <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
+          {/* Barra inferior sticky con Total y Botón */}
+          <div className="sticky bottom-0 z-20 -mx-5 sm:-mx-6 px-5 sm:px-6 py-4 bg-white/95 backdrop-blur-md border-t border-slate-200 rounded-b-2xl flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs">
-              <span className="text-slate-500">Monto Total a Timbrar:</span>
+              <span className="text-slate-500 block">Monto Total a Timbrar:</span>
               <div className="text-lg font-black text-slate-900">{formatDOP(calculated.totales.montoTotal)}</div>
+              <span className="text-[10px] text-slate-400 hidden sm:inline">
+                Atajos: <kbd className="px-1 py-0.5 bg-slate-100 rounded border border-slate-200 font-mono">Ctrl+Enter</kbd> emitir ·{' '}
+                <kbd className="px-1 py-0.5 bg-slate-100 rounded border border-slate-200 font-mono">Ctrl+Shift+A</kbd> línea
+              </span>
             </div>
 
             <button
               type="button"
-              disabled={emitting}
+              disabled={!canEmit}
               onClick={handleEmit}
-              className="px-6 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center gap-2 transition disabled:opacity-50"
+              title={!isBuyerRncValidForE31 ? 'Completa el RNC y Razón Social para emitir e-CF 31' : undefined}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center gap-2 transition disabled:opacity-45 disabled:cursor-not-allowed btn-fx cursor-pointer"
             >
               <Send className="w-4 h-4" />
               <span>{emitting ? 'Firmando y Timbrando...' : 'Firmar y Emitir e-CF ante DGII'}</span>

@@ -10,13 +10,44 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'ANTEK Factura | Facturación Electrónica DGII (Ley 32-23)',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://factura.antek.com.do'),
+  title: 'ANTEK Factura | Facturación Electrónica e-CF República Dominicana',
   description:
-    'Plataforma SaaS multi-tenant de Facturación Electrónica (e-CF) de ANTEK para República Dominicana con cumplimiento DGII Ley 32-23, integración GTI y API REST pública (antek.com.do).',
-  authors: [{ name: 'antek', url: 'https://antek.com.do' }],
-  creator: 'antek',
+    'Emite facturas electrónicas e-CF, escanea gastos 606 con tu cámara y cumple con la DGII (Ley 32-23). Prueba gratis 5 días.',
+  keywords: [
+    'facturación electrónica e-CF República Dominicana',
+    'DGII Ley 32-23',
+    'formato 606 y 607',
+    'sistema de facturación RD',
+    'ANTEK Factura',
+  ],
+  authors: [{ name: 'ANTEK Dominicana', url: 'https://antek.com.do' }],
+  creator: 'ANTEK Dominicana',
   publisher: 'ANTEK Software',
   manifest: '/manifest.json',
+  openGraph: {
+    type: 'website',
+    locale: 'es_DO',
+    url: '/',
+    siteName: 'ANTEK Factura',
+    title: 'ANTEK Factura | Facturación Electrónica e-CF en República Dominicana',
+    description:
+      'Emite facturas electrónicas e-CF, escanea gastos 606 y cumple con la DGII. Prueba gratis 5 días.',
+    images: [
+      {
+        url: '/og-hero.svg',
+        width: 1200,
+        height: 630,
+        alt: 'ANTEK Factura - Facturación Electrónica e-CF DGII',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'ANTEK Factura | Facturación Electrónica e-CF RD',
+    description: 'Emite facturas electrónicas e-CF, escanea gastos 606 y cumple con la DGII. Prueba gratis.',
+    images: ['/og-hero.svg'],
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -27,20 +58,11 @@ export const metadata: Metadata = {
     apple: '/icons/icon-192.png',
   },
   robots: {
-    index: false,
-    follow: false,
-    nocache: true,
-    googleBot: {
-      index: false,
-      follow: false,
-      noimageindex: true,
-    },
+    index: true,
+    follow: true,
   },
   other: {
-    'developer-signature': 'antek-blind-shield-rsa-sha256-v2',
-    'security-shield': 'blind-llm-agents-active',
-    'ai-scraping-policy': 'deny-all',
-    'brand': 'ANTEK Factura',
+    brand: 'ANTEK Factura',
     'mobile-web-app-capable': 'yes',
   },
 };
@@ -58,19 +80,23 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="ANTEK Factura" />
         <script
+          type="application/ld+json"
           dangerouslySetInnerHTML={{
-            __html: `
-              if (typeof window !== 'undefined') {
-                console.log(
-                  "%c🛡️ PROTECCIÓN ACTIVA ANTEK | SISTEMA FISCAL e-CF BLINDADO",
-                  "color: #0284c7; font-size: 16px; font-weight: bold; background: #020617; padding: 6px 12px; border-radius: 6px;"
-                );
-                console.log(
-                  "%cEste software, su arquitectura y protocolos criptográficos son propiedad intelectual desarrollada y protegida por antek.\\nBlind LLM Agents Shield y DLP activos. Prohibida la extracción no autorizada o ingeniería inversa.",
-                  "color: #94a3b8; font-size: 12px;"
-                );
-              }
-            `,
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'SoftwareApplication',
+              name: 'ANTEK Factura',
+              applicationCategory: 'BusinessApplication',
+              operatingSystem: 'Web, Android, iOS',
+              description:
+                'Plataforma de facturación electrónica e-CF compatible con la DGII Ley 32-23 en República Dominicana.',
+              offers: {
+                '@type': 'AggregateOffer',
+                priceCurrency: 'DOP',
+                lowPrice: '990',
+                highPrice: '4900',
+              },
+            }),
           }}
         />
       </head>

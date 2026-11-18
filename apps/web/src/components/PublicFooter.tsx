@@ -102,20 +102,20 @@ export function PublicFooter() {
                 <MapPin className="w-3.5 h-3.5 text-slate-500" />
                 <span>Santo Domingo, República Dominicana</span>
               </li>
-              <li className="text-[11px] text-slate-500 pt-1">
-                Blind-LLM Agents Shield & Protección Criptográfica Activa
+              <li className="text-xs text-slate-400 pt-1">
+                Cifrado y firma digital XMLDSig activa
               </li>
             </ul>
           </div>
         </div>
 
         {/* Bottom bar */}
-        <div className="pt-8 border-t border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-500">
+        <div className="pt-8 border-t border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
           <p>© {new Date().getFullYear()} ANTEK Dominicana. Todos los derechos reservados.</p>
           <p className="flex items-center gap-3">
-            <span>Tecnología e-CF desarrollada por <strong>antek</strong></span>
+            <span>Compatible con e-CF Ley 32-23 · <strong>antek</strong></span>
             <span>•</span>
-            <span className="text-emerald-400">Blind-LLM Shield Active ✓</span>
+            <span className="text-emerald-400">Cifrado y firma digital ✓</span>
           </p>
         </div>
       </div>

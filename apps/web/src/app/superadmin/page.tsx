@@ -108,9 +108,12 @@ export default function SuperAdminPage() {
       setPaymentSettings(settingsRes || null);
       setAuditLogs(Array.isArray(auditRes) ? auditRes : []);
     } catch (err: any) {
+      const raw = String(err?.message || '');
+      const isNetwork = /failed to fetch|network|timeout|abort/i.test(raw);
       setErrorMsg(
-        err?.message ||
-          'No se pudo cargar la consola Super-Admin. Asegúrate de haber iniciado sesión con la cuenta root.'
+        isNetwork
+          ? 'No pudimos cargar los datos. Verifica tu conexión o sesión e inténtalo de nuevo.'
+          : raw || 'No pudimos cargar los datos de la consola Super-Admin.'
       );
     } finally {
       setLoading(false);
@@ -367,9 +370,20 @@ export default function SuperAdminPage() {
 
       <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
         {errorMsg && (
-          <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs font-semibold flex items-center gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{errorMsg}</span>
+          <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs font-semibold flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-100 font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Reintentar
+            </button>
           </div>
         )}
 
@@ -400,7 +414,11 @@ export default function SuperAdminPage() {
                 Ingresos Mensuales Activos (MRR)
               </div>
               <div className="text-2xl sm:text-3xl font-black text-sky-400 font-mono mt-0.5">
-                DOP ${Number(metrics?.mrrDop || 0).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                {loading && !metrics ? (
+                  <span className="inline-block w-36 h-8 skeleton align-middle" />
+                ) : (
+                  formatDOP(metrics?.mrrDop)
+                )}
               </div>
             </div>
           </div>

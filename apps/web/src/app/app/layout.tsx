@@ -95,7 +95,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 
   const mainNav = [
     { href: '/app/dashboard', label: 'Resumen Ejecutivo', icon: LayoutDashboard },
-    { href: '/app/invoices/new', label: 'Nueva Factura e-CF', icon: FilePlus2, highlight: true },
+    { href: '/app/invoices/new', label: 'Nueva Factura e-CF', icon: FilePlus2 },
     { href: '/app/invoices', label: 'Comprobantes Emitidos', icon: Receipt },
     { href: '/app/purchases', label: 'Bandeja Compras & QR', icon: QrCode },
     { href: '/app/customers', label: 'Clientes & RNC', icon: Users },
@@ -119,7 +119,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     )?.label || 'Portal Fiscal e-CF';
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row text-slate-800 selection:bg-sky-500 selection:text-white">
+    <div className="min-h-screen bg-[#f6f8fc] flex flex-col lg:flex-row text-slate-800 selection:bg-sky-500 selection:text-white">
       {/* Sidebar Desktop */}
       <aside className="hidden lg:flex w-72 flex-col bg-slate-950 text-slate-200 border-r border-slate-800 shrink-0 sticky top-0 h-screen">
         <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
@@ -180,14 +180,15 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-3 px-3 py-2 rounded-xl font-semibold transition ${
+                className={`relative flex items-center gap-3 px-3 py-2 rounded-xl font-semibold transition ${
                   active
                     ? 'bg-sky-500 text-slate-950 shadow-md font-bold'
-                    : item.highlight
-                    ? 'bg-sky-950/60 text-sky-300 border border-sky-500/30 hover:bg-sky-900/60'
                     : 'text-slate-300 hover:bg-slate-900 hover:text-white'
                 }`}
               >
+                {active && (
+                  <span className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-sky-300" />
+                )}
                 <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-slate-950' : 'text-slate-400'}`} />
                 <span>{item.label}</span>
               </Link>
@@ -218,7 +219,10 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="p-3 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[10px] truncate">
+          <div
+            title={userName || 'Sesión Segura'}
+            className="flex items-center gap-1.5 text-emerald-400 font-semibold text-[11px] truncate"
+          >
             <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">{userName || 'Sesión Segura ✓'}</span>
           </div>
@@ -273,30 +277,21 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
             </Link>
             <Link
               href="/app/invoices/new"
-              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm shadow-sky-600/20 transition"
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm shadow-sky-600/20 transition btn-fx"
             >
               <FilePlus2 className="w-3.5 h-3.5" />
               <span>Nueva Factura e-CF</span>
             </Link>
-            {isSuperAdmin && (
-              <Link
-                href="/superadmin"
-                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs inline-flex items-center gap-1.5 transition"
-              >
-                <Crown className="w-3.5 h-3.5 text-amber-600" />
-                <span>Super-Admin</span>
-              </Link>
-            )}
             <Link
               href="/app/settings/profile"
               className="ml-1 pl-2 pr-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200/80 border border-slate-200 flex items-center gap-2 transition"
-              title="Mi Perfil y Suscripción"
+              title={userName ? `${userName} · Mi Perfil y Suscripción` : 'Mi Perfil y Suscripción'}
             >
               <span className="w-7 h-7 rounded-full bg-gradient-to-tr from-sky-600 to-indigo-600 text-white text-[11px] font-black flex items-center justify-center uppercase">
                 {(userName || 'U').slice(0, 2)}
               </span>
               <span className="text-left leading-tight hidden xl:block">
-                <span className="block text-[11px] font-bold text-slate-900 max-w-[110px] truncate">
+                <span className="block text-[11px] font-bold text-slate-900 max-w-[140px] truncate">
                   {userName || 'Usuario'}
                 </span>
                 <span className="block text-[9px] font-bold text-sky-700 uppercase">

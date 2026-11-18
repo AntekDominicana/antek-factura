@@ -14,7 +14,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { AntekLogo } from '../../../../components/AntekLogo';
-import { API_BASE_URL, apiFetch } from '../../../../lib/api';
+import { API_BASE_URL, apiFetch, formatDOP } from '../../../../lib/api';
 
 export default function PublicInvoiceViewPage() {
   const params = useParams();
@@ -113,7 +113,7 @@ export default function PublicInvoiceViewPage() {
                   ITBIS Facturado (18%)
                 </div>
                 <div className="text-base font-bold text-slate-700 font-mono mt-0.5">
-                  DOP ${Number(invoice?.totalItbis || 0).toFixed(2)}
+                  {formatDOP(Number(invoice?.totalItbis || 0))}
                 </div>
               </div>
 
@@ -122,7 +122,7 @@ export default function PublicInvoiceViewPage() {
                   Monto Total a Pagar
                 </div>
                 <div className="text-2xl font-black text-slate-950 font-mono mt-0.5">
-                  DOP ${Number(invoice?.montoTotal || 0).toFixed(2)}
+                  {formatDOP(Number(invoice?.montoTotal || 0))}
                 </div>
               </div>
             </div>
@@ -163,7 +163,7 @@ export default function PublicInvoiceViewPage() {
       {/* Footer General */}
       <footer className="p-4 text-center text-xs text-slate-400">
         Desarrollado y certificado por{' '}
-        <strong className="text-slate-600">ANTEK</strong> (antek.com.do) &bull; Blind-LLM Shield
+        <strong className="text-slate-600">ANTEK</strong> (antek.com.do) &bull; Cifrado y firma digital
         Active
       </footer>
     </div>

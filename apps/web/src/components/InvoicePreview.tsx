@@ -92,7 +92,7 @@ export function InvoicePreview({
       </div>
       <div style="text-align: right;">
         Emitido con <strong>ANTEK Factura</strong> • <a href="https://antek.com.do" style="color: #0284c7; text-decoration: none;">antek.com.do</a><br/>
-        <span style="font-size: 9px; color: #94a3b8;">Sistema Fiscal Certificado DGII Ley 32-23 • Blind-LLM Shield Active</span>
+        <span style="font-size: 9px; color: #94a3b8;">Compatible con e-CF Ley 32-23 • Cifrado y firma digital</span>
       </div>
     </div>
   </div>
@@ -224,7 +224,7 @@ export function InvoicePreview({
                     <span className="text-xs font-semibold text-slate-700">
                       {tenant?.razonSocial || 'Tu Empresa'}
                     </span>
-                    <span className="text-[10px] text-slate-400 font-medium">
+                    <span className="text-[10px] text-slate-400 font-medium no-print print:hidden">
                       (Sube tu logo en Configuración)
                     </span>
                   </div>
@@ -250,7 +250,13 @@ export function InvoicePreview({
                 </span>
                 <div className="mt-1.5">
                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">e-CF / e-NCF:</span>
-                  <p className="font-mono font-bold text-slate-900 text-base tracking-tight leading-none mt-0.5">{encf}</p>
+                  {emittedResult ? (
+                    <p className="font-mono font-bold text-slate-900 text-base tracking-tight leading-none mt-0.5">{encf}</p>
+                  ) : (
+                    <p className="font-mono font-bold text-amber-600 text-xs tracking-tight leading-snug mt-0.5">
+                      Borrador / se asignará al emitir
+                    </p>
+                  )}
                 </div>
                 <div className="mt-1.5 text-xs text-slate-600">
                   <span className="font-semibold text-slate-500">Fecha de Emisión: </span>
@@ -282,8 +288,11 @@ export function InvoicePreview({
             <div className="py-3.5 border-b border-slate-100 text-xs space-y-1.5">
               <div className="flex justify-between gap-2">
                 <span className="text-slate-500">Receptor:</span>
-                <span className="font-semibold text-slate-800 text-right">
-                  {draftInvoice.comprador?.razonSocialComprador || 'Consumidor Final'}
+                <span className={`font-semibold text-right ${!draftInvoice.comprador?.razonSocialComprador && draftInvoice.tipoEcf === 31 ? 'text-amber-600' : 'text-slate-800'}`}>
+                  {draftInvoice.comprador?.razonSocialComprador ||
+                    (draftInvoice.tipoEcf === 31
+                      ? 'Receptor obligatorio (RNC requerido)'
+                      : 'Consumidor Final')}
                 </span>
               </div>
               <div className="flex justify-between gap-2">
@@ -428,17 +437,17 @@ export function InvoicePreview({
                 </div>
               </div>
               <span className="px-2 py-0.5 rounded-md bg-sky-500/20 text-sky-300 text-[10px] font-bold shrink-0 border border-sky-400/30">
-                Software Proveedor Autorizado ✓
+                Compatible e-CF Ley 32-23 ✓
               </span>
             </div>
 
-            {/* Firma de Autoría y Blindaje antek */}
+            {/* Firma de Autoría y Seguridad antek */}
             <div className="mt-3 pt-2.5 border-t border-slate-200/70 text-center space-y-0.5 text-[10px] text-slate-500 select-none">
               <p className="font-semibold text-slate-700">
-                Sistema Fiscal e-CF Certificado • Desarrollado y Firmado por <span className="font-bold text-sky-600">ANTEK</span> (antek.com.do)
+                Compatible con e-CF Ley 32-23 • Desarrollado y Firmado por <span className="font-bold text-sky-600">ANTEK</span> (antek.com.do)
               </p>
               <p className="text-[9px] text-slate-400">
-                ANTEK Factura • Blind-LLM Shield Active • Tecnología Criptográfica Protegida por ANTEK • Prohibida la Ingeniería Inversa
+                ANTEK Factura • Cifrado y firma digital XMLDSig • Protección de datos fiscales
               </p>
             </div>
 

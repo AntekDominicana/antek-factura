@@ -1,17 +1,26 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
-import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('antek_remember_identifier');
+      if (saved) setIdentifier(saved);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +46,11 @@ export default function LoginPage() {
       if (data.user) {
         localStorage.setItem('antek_user', JSON.stringify(data.user));
         localStorage.removeItem('antek_tenant_cache');
+        if (rememberMe) {
+          localStorage.setItem('antek_remember_identifier', identifier.trim());
+        } else {
+          localStorage.removeItem('antek_remember_identifier');
+        }
         if (data.accessToken) {
           localStorage.setItem('antek_token', data.accessToken);
         }
@@ -90,7 +104,7 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5 animate-in fade-in duration-200">
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5 shake">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
               <div className="flex-1 leading-relaxed">
                 <span className="font-semibold block">Acceso denegado:</span>
@@ -99,9 +113,9 @@ export default function LoginPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          <form onSubmit={handleSubmit} className="space-y-4 text-xs dark-form">
             <div>
-              <label className="block text-slate-300 font-semibold mb-1">
+              <label className="block text-slate-300 font-semibold mb-1.5">
                 Correo Electrónico o Usuario
               </label>
               <div className="relative">
@@ -113,17 +127,17 @@ export default function LoginPage() {
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   placeholder="correo@tuempresa.com.do"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-hidden focus:border-sky-500"
+                  className="w-full bg-[#131c33] border border-slate-700/80 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-sky-500"
                 />
               </div>
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-1.5">
                 <label className="text-slate-300 font-semibold">Contraseña</label>
                 <Link
                   href="/forgot-password"
-                  className="text-[11px] text-sky-400 hover:underline"
+                  className="text-xs text-sky-400 hover:underline"
                 >
                   ¿Olvidaste tu contraseña?
                 </Link>
@@ -131,24 +145,51 @@ export default function LoginPage() {
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-hidden focus:border-sky-500"
+                  className="w-full bg-[#131c33] border border-slate-700/80 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-sky-500"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  className="absolute right-3 top-2.5 p-0.5 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
+
+            <label className="flex items-center gap-2.5 cursor-pointer text-xs text-slate-300 select-none pt-0.5">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="dark-checkbox"
+              />
+              <span>Recordar mi correo en este dispositivo</span>
+            </label>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-sm shadow-lg shadow-sky-500/20 flex items-center justify-center gap-2 transition disabled:opacity-60 btn-fx cursor-pointer"
             >
-              <span>{loading ? 'Verificando acceso...' : 'Entrar a ANTEK Factura'}</span>
-              <ArrowRight className="w-4 h-4" />
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verificando acceso...</span>
+                </>
+              ) : (
+                <>
+                  <span>Entrar a ANTEK Factura</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
 

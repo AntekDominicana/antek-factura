@@ -24,8 +24,11 @@ export async function POST(request: Request) {
     const data = await apiRes.json();
 
     if (!apiRes.ok) {
+      const msgMap: Record<string, string> = {
+        'Invalid login credentials': 'Correo o contraseña incorrectos.',
+      };
       return NextResponse.json(
-        { message: data.message || 'Credenciales inválidas en Supabase.' },
+        { message: msgMap[data.message] || data.message || 'Correo o contraseña incorrectos.' },
         { status: apiRes.status }
       );
     }
@@ -61,7 +64,7 @@ export async function POST(request: Request) {
     return response;
   } catch (error: any) {
     return NextResponse.json(
-      { message: 'Error de conexión con el servidor de autenticación Supabase.' },
+      { message: 'No pudimos iniciar sesión. Inténtalo de nuevo.' },
       { status: 500 }
     );
   }
