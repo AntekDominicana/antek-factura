@@ -485,7 +485,7 @@ function RegisterForm() {
 
           <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Prueba gratis de 5 días en todos los planes · Cero cargos ocultos</span>
+            <span>Probar 5 días sin pagar en todos los planes · Cero cargos ocultos</span>
           </div>
         </div>
       </main>

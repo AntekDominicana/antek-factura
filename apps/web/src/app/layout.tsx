@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://factura.antek.com.do'),
   title: 'ANTEK Factura | Facturación Electrónica e-CF República Dominicana',
   description:
-    'Emite facturas electrónicas e-CF, escanea gastos 606 con tu cámara y cumple con la DGII (Ley 32-23). Prueba gratis 5 días.',
+    'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
   keywords: [
     'facturación electrónica e-CF República Dominicana',
     'DGII Ley 32-23',
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
     siteName: 'ANTEK Factura',
     title: 'ANTEK Factura | Facturación Electrónica e-CF en República Dominicana',
     description:
-      'Emite facturas electrónicas e-CF, escanea gastos 606 y cumple con la DGII. Prueba gratis 5 días.',
+      'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
     images: [
       {
         url: '/og-hero.svg',

@@ -174,7 +174,7 @@ export default function HomePage() {
               <div className="lg:col-span-7 space-y-6 text-center lg:text-left">
                 <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0d1426] border border-slate-700/80 text-xs sm:text-[13px] font-semibold text-sky-300">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>Compatible con e-CF Ley 32-23 · República Dominicana</span>
+                  <span>Compatible con e-CF · Ley 32-23</span>
                 </div>
 
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight text-white leading-[1.1]">
@@ -192,7 +192,7 @@ export default function HomePage() {
                     href="/register"
                     className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-[#18a8f0] to-[#5b5bf0] text-white font-bold text-base shadow-xl shadow-sky-500/25 flex items-center justify-center gap-2 btn-fx"
                   >
-                    <span>Comenzar Prueba Gratis (5 Días)</span>
+                    <span>Probar 5 días sin pagar</span>
                     <ArrowRight className="w-5 h-5" />
                   </Link>
                   <Link
@@ -309,7 +309,7 @@ export default function HomePage() {
                 { title: 'Firma XMLDSig RSA', desc: 'Validación con tu certificado .p12' },
                 { title: 'Escáner QR 606', desc: 'Lectura de gastos en tiempo real' },
                 { title: 'Respaldo Offline', desc: 'Modo contingencia ante caídas' },
-                { title: 'Cifrado y firma digital', desc: 'Seguridad bancaria por empresa' },
+                { title: 'Firma y cifrado digital', desc: 'Seguridad bancaria por empresa' },
               ].map((badge, i) => (
                 <div key={i} className="p-4 rounded-xl bg-[#0d1426] border border-white/10 space-y-1">
                   <div className="text-sm font-bold text-white flex items-center gap-1.5">
@@ -529,7 +529,7 @@ export default function HomePage() {
 
             {/* Desktop Table */}
             <div className="hidden sm:block rounded-2xl border border-white/10 bg-[#0d1426] overflow-hidden shadow-2xl">
-              <div className="overflow-x-auto">
+              <div className="comparison-wrap">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-[#131c33] text-slate-300 border-b border-white/10">
                     <tr>
@@ -564,7 +564,7 @@ export default function HomePage() {
                 Elige el Plan que se Adapta a Tu Negocio
               </h3>
               <p className="text-sm sm:text-base text-[#a8b3c7]">
-                Prueba gratis durante 5 días en cualquier plan. Precios expresados en DOP + ITBIS.
+                Probar 5 días sin pagar en cualquier plan. Precios expresados en DOP + ITBIS.
               </p>
 
               {/* Toggle Mensual / Anual */}
@@ -653,7 +653,7 @@ export default function HomePage() {
                         </li>
                         <li className="flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                          Prueba gratis 5 días
+                          Probar 5 días sin pagar
                         </li>
                       </ul>
                     </div>
