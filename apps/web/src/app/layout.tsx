@@ -35,7 +35,7 @@ export const metadata: Metadata = {
       'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
     images: [
       {
-        url: '/og-hero.svg',
+        url: '/og-cover.png',
         width: 1200,
         height: 630,
         alt: 'ANTEK Factura - Facturación Electrónica e-CF DGII',
@@ -45,8 +45,9 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: 'ANTEK Factura | Facturación Electrónica e-CF RD',
-    description: 'Emite facturas electrónicas e-CF, escanea gastos 606 y cumple con la DGII. Prueba gratis.',
-    images: ['/og-hero.svg'],
+    description:
+      'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
+    images: ['/og-cover.png'],
   },
   appleWebApp: {
     capable: true,
@@ -54,8 +55,12 @@ export const metadata: Metadata = {
     title: 'ANTEK Factura',
   },
   icons: {
-    icon: '/antek-logo.svg',
-    apple: '/icons/icon-192.png',
+    icon: [
+      { url: '/favicon.png', type: 'image/png' },
+      { url: '/brand/icon-a.png', type: 'image/png' },
+    ],
+    shortcut: '/favicon.png',
+    apple: '/brand/icon-a.png',
   },
   robots: {
     index: true,

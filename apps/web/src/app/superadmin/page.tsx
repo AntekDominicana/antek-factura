@@ -533,95 +533,161 @@ export default function SuperAdminPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/70">
-                  {filteredTenants.map((t) => {
-                    const sub = t.subscription;
-                    const plan = sub?.plan;
-                    const limit = plan?.monthlyInvoiceLimit || 100;
-                    const used = sub?.invoicesUsedCurrentPeriod || 0;
-                    const pendingPayments = (sub?.payments || []).filter((p: any) => p.status === 'PENDING');
-                    const requestedChange = sub?.externalCustomerId?.startsWith('REQ:')
-                      ? sub.externalCustomerId.replace('REQ:', '').replace(':', ' ')
-                      : null;
+                  {filteredTenants.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-10 px-4 text-center text-slate-400 text-xs">
+                        {loading
+                          ? 'Cargando empresas y usuarios...'
+                          : 'No se encontraron empresas o usuarios con ese criterio.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTenants.map((t) => {
+                      const sub = t.subscription;
+                      const plan = sub?.plan;
+                      const limit = plan?.monthlyInvoiceLimit || 100;
+                      const used = sub?.invoicesUsedCurrentPeriod || 0;
+                      const pendingPayments = (sub?.payments || []).filter((p: any) => p.status === 'PENDING');
+                      const requestedChange = sub?.externalCustomerId?.startsWith('REQ:')
+                        ? sub.externalCustomerId.replace('REQ:', '').replace(':', ' ')
+                        : null;
+                      const endIso = sub?.graceEndsAt || sub?.trialEndsAt || sub?.currentPeriodEnd;
+                      const daysLeft =
+                        typeof t.daysRemaining === 'number'
+                          ? t.daysRemaining
+                          : endIso
+                          ? Math.max(0, Math.ceil((new Date(endIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+                          : null;
+                      const cleanPhone = String(t.telefono || '').replace(/\D/g, '');
+                      const usersList = Array.isArray(t.users) ? t.users : [];
 
-                    return (
-                      <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
-                        <td className="py-4 px-4">
-                          <div className="font-bold text-white leading-tight">{t.razonSocial}</div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            RNC: {t.rnc} · {t.correo}
-                          </div>
-                        </td>
-                        <td className="py-4 px-4">
-                          <span className="font-bold text-sky-400">{plan?.name || 'Sin Plan'}</span>
-                          <div className="text-[11px] text-slate-400">
-                            {formatDOP(Number(plan?.priceDop || 0))}/mes
-                          </div>
-                          {(requestedChange || pendingPayments.length > 0) && (
-                            <span className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                              <Clock className="w-3 h-3" />
-                              {requestedChange ? `Solicitó: ${requestedChange}` : 'Pago pendiente'}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-4 px-4">
-                          {sub?.status === 'ACTIVE' ? (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                              ACTIVO
-                            </span>
-                          ) : sub?.status === 'PAST_DUE' ? (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                              EN GRACIA
-                            </span>
-                          ) : (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                              {sub?.status || 'SUSPENDIDO'}
-                            </span>
-                          )}
-                          <div className="text-[10px] text-slate-500 font-mono mt-1">
-                            Vence:{' '}
-                            {sub?.currentPeriodEnd
-                              ? new Date(sub.currentPeriodEnd).toLocaleDateString('es-DO')
-                              : '—'}
-                          </div>
-                        </td>
-                        <td className="py-4 px-4 text-center font-mono text-xs">
-                          <span className="font-bold text-white">{used}</span>
-                          <span className="text-slate-500"> / {limit}</span>
-                          <div className="text-[10px] text-slate-500">
-                            {t._count?.invoices || 0} fac · {t._count?.receivedPurchases || 0} 606
-                          </div>
-                        </td>
-                        <td className="py-4 px-4 text-right">
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openInvoiceLinkModal(t)}
-                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
-                            >
-                              <Send className="w-3.5 h-3.5" />
-                              <span>Enviar Factura / Link</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActivateModalTenant(t);
-                                setSelectedPlan(plan?.code || 'MEDIUM');
-                                setSelectedStatus(
-                                  sub?.status === 'PAST_DUE' || sub?.status === 'SUSPENDED'
-                                    ? sub.status
-                                    : 'ACTIVE'
-                                );
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
-                            >
-                              <Settings2 className="w-3.5 h-3.5" />
-                              <span>Activar / Estado</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      return (
+                        <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
+                          <td className="py-4 px-4">
+                            <div className="font-bold text-white leading-tight">{t.razonSocial}</div>
+                            <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                              RNC: {t.rnc} ·{' '}
+                              <a href={`mailto:${t.correo}`} className="text-sky-400 hover:underline">
+                                {t.correo}
+                              </a>
+                            </div>
+                            {t.telefono && (
+                              <div className="text-[11px] text-emerald-400 font-mono mt-0.5">
+                                Tel:{' '}
+                                {cleanPhone.length >= 10 ? (
+                                  <a
+                                    href={`https://wa.me/${cleanPhone.startsWith('1') ? cleanPhone : `1${cleanPhone}`}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="hover:underline"
+                                  >
+                                    {t.telefono} (WhatsApp)
+                                  </a>
+                                ) : (
+                                  t.telefono
+                                )}
+                              </div>
+                            )}
+                            {usersList.length > 0 && (
+                              <div className="mt-1.5 space-y-0.5">
+                                {usersList.slice(0, 3).map((u: any) => (
+                                  <div key={u.id} className="text-[10px] text-slate-400 flex items-center gap-1.5">
+                                    <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-semibold">
+                                      {u.role}
+                                    </span>
+                                    <span className="truncate max-w-[180px]" title={u.email}>
+                                      {u.fullName} ({u.email})
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-4 px-4">
+                            <span className="font-bold text-sky-400">{plan?.name || 'Sin Plan'}</span>
+                            <div className="text-[11px] text-slate-400">
+                              {formatDOP(Number(plan?.priceDop || 0))}/mes
+                            </div>
+                            {(requestedChange || pendingPayments.length > 0) && (
+                              <span className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                <Clock className="w-3 h-3" />
+                                {requestedChange ? `Solicitó: ${requestedChange}` : 'Pago pendiente'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-4">
+                            {sub?.status === 'ACTIVE' ? (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                ACTIVO
+                              </span>
+                            ) : sub?.status === 'PAST_DUE' ? (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                EN PRUEBA / GRACIA
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                {sub?.status || 'SUSPENDIDO'}
+                              </span>
+                            )}
+                            {daysLeft !== null && (
+                              <div
+                                className={`text-[11px] font-bold mt-1 ${
+                                  daysLeft <= 1
+                                    ? 'text-rose-400'
+                                    : daysLeft <= 3
+                                    ? 'text-amber-400'
+                                    : 'text-emerald-400'
+                                }`}
+                              >
+                                {daysLeft === 0
+                                  ? 'Vence hoy'
+                                  : `Quedan ${daysLeft} ${daysLeft === 1 ? 'día' : 'días'}`}
+                              </div>
+                            )}
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                              Vence:{' '}
+                              {endIso ? new Date(endIso).toLocaleDateString('es-DO') : '—'}
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-center font-mono text-xs">
+                            <span className="font-bold text-white">{used}</span>
+                            <span className="text-slate-500"> / {limit}</span>
+                            <div className="text-[10px] text-slate-500">
+                              {t._count?.invoices || 0} fac · {t._count?.receivedPurchases || 0} 606 · {t._count?.users || usersList.length || 1} usr
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-right">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openInvoiceLinkModal(t)}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                                <span>Enviar Factura / Link</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActivateModalTenant(t);
+                                  setSelectedPlan(plan?.code || 'MEDIUM');
+                                  setSelectedStatus(
+                                    sub?.status === 'PAST_DUE' || sub?.status === 'SUSPENDED'
+                                      ? sub.status
+                                      : 'ACTIVE'
+                                  );
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+                              >
+                                <Settings2 className="w-3.5 h-3.5" />
+                                <span>Activar / Estado</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>

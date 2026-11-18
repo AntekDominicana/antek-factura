@@ -58,6 +58,17 @@ export class SuperAdminService {
   async getAllTenants(): Promise<any> {
     const tenants = await prisma.tenant.findMany({
       include: {
+        users: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            role: true,
+            isActive: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
         subscription: {
           include: {
             plan: true,
@@ -78,25 +89,33 @@ export class SuperAdminService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return tenants.map((t) => ({
-      ...t,
-      subscription: t.subscription
-        ? {
-            ...t.subscription,
-            plan: t.subscription.plan
-              ? {
-                  ...t.subscription.plan,
-                  priceDop: Number(t.subscription.plan.priceDop),
-                  priceUsd: Number(t.subscription.plan.priceUsd),
-                }
-              : null,
-            payments: (t.subscription.payments || []).map((p) => ({
-              ...p,
-              amount: Number(p.amount),
-            })),
-          }
-        : null,
-    }));
+    return tenants.map((t) => {
+      const endDateRaw = t.subscription?.currentPeriodEnd;
+      const daysRemaining = endDateRaw
+        ? Math.max(0, Math.ceil((new Date(endDateRaw).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+        : null;
+
+      return {
+        ...t,
+        daysRemaining,
+        subscription: t.subscription
+          ? {
+              ...t.subscription,
+              plan: t.subscription.plan
+                ? {
+                    ...t.subscription.plan,
+                    priceDop: Number(t.subscription.plan.priceDop),
+                    priceUsd: Number(t.subscription.plan.priceUsd),
+                  }
+                : null,
+              payments: (t.subscription.payments || []).map((p) => ({
+                ...p,
+                amount: Number(p.amount),
+              })),
+            }
+          : null,
+      };
+    });
   }
 
   /**
