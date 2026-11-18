@@ -254,7 +254,7 @@ export function InvoicePreview({
                     <p className="font-mono font-bold text-slate-900 text-base tracking-tight leading-none mt-0.5">{encf}</p>
                   ) : (
                     <p className="font-mono font-bold text-amber-600 text-xs tracking-tight leading-snug mt-0.5">
-                      Borrador / se asignará al emitir
+                      Pendiente de asignar
                     </p>
                   )}
                 </div>

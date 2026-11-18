@@ -311,6 +311,11 @@ export default function NewInvoicePage() {
                     </option>
                   ))}
                 </datalist>
+                {tipoEcf === 31 && ![9, 11].includes(cleanBuyerRnc.length) && (
+                  <p className="text-[11px] text-rose-600 font-medium mt-1">
+                    Ingresa un RNC o Cédula válido (9 u 11 dígitos numéricos).
+                  </p>
+                )}
               </div>
 
               <div>
@@ -322,8 +327,17 @@ export default function NewInvoicePage() {
                   value={razonSocialComprador}
                   onChange={(e) => setRazonSocialComprador(e.target.value)}
                   placeholder={tipoEcf === 31 ? 'Nombre o Razón Social obligatoria' : 'Consumidor Final'}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs"
+                  className={`w-full bg-white border rounded-xl px-3 py-2 text-xs ${
+                    tipoEcf === 31 && !razonSocialComprador.trim()
+                      ? 'border-rose-300 focus:border-rose-500'
+                      : 'border-slate-300'
+                  }`}
                 />
+                {tipoEcf === 31 && !razonSocialComprador.trim() && (
+                  <p className="text-[11px] text-rose-600 font-medium mt-1">
+                    La Razón Social es obligatoria para e-CF 31.
+                  </p>
+                )}
               </div>
             </div>
 
