@@ -12,11 +12,15 @@ export class HealthController {
       service: 'ANTEK Factura API (e-CF DGII)',
       developer: 'antek',
       brand: 'ANTEK Factura',
-      securityShield: 'blind-llm-agents-active',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV || 'production',
       dgiiReceptor: 'operational',
+      miniPcIntegrations: {
+        litellmConfigured: Boolean(process.env.LITELLM_BASE_URL),
+        n8nWebhookConfigured: Boolean(process.env.MINI_PC_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL),
+        gotenbergConfigured: Boolean(process.env.GOTENBERG_URL),
+      },
     };
   }
 }

@@ -16,10 +16,10 @@ export function AntekLogo({
   theme = 'dark',
 }: AntekLogoProps) {
   const sizeMap = {
-    sm: { height: 32, emblemSize: 28, horizontalWidth: 120, textClass: 'text-sm' },
-    md: { height: 42, emblemSize: 36, horizontalWidth: 158, textClass: 'text-base' },
-    lg: { height: 52, emblemSize: 46, horizontalWidth: 196, textClass: 'text-xl' },
-    xl: { height: 64, emblemSize: 56, horizontalWidth: 240, textClass: 'text-2xl' },
+    sm: { height: 36, emblemSize: 30, horizontalWidth: 168, textClass: 'text-sm' },
+    md: { height: 48, emblemSize: 38, horizontalWidth: 224, textClass: 'text-base' },
+    lg: { height: 58, emblemSize: 48, horizontalWidth: 270, textClass: 'text-xl' },
+    xl: { height: 72, emblemSize: 60, horizontalWidth: 330, textClass: 'text-2xl' },
   };
 
   const { height, emblemSize, horizontalWidth, textClass } = sizeMap[size];
@@ -72,8 +72,8 @@ export function AntekLogo({
         alt="ANTEK Factura"
         width={horizontalWidth}
         height={height}
-        style={{ height, width: 'auto', maxWidth: horizontalWidth }}
-        className="shrink-0 object-contain rounded-lg"
+        style={{ height, width: 'auto' }}
+        className="shrink-0 object-contain"
       />
     </div>
   );

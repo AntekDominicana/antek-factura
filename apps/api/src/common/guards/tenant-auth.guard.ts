@@ -60,12 +60,18 @@ export class TenantAuthGuard implements CanActivate {
         if (decoded && (decoded.sub || decoded.userId)) {
           const userId = decoded.sub || decoded.userId;
 
-          // REVISIÓN DE PERMISOS EN CADA PETICIÓN (Live DB Check):
-          // Verifica en tiempo real que el usuario no haya sido desactivado o bloqueado
-          const liveUser = await prisma.tenantUser.findUnique({
-            where: { id: userId },
-            include: { tenant: true },
-          });
+          // REVISIÓN DE PERMISOS EN CADA PETICIÓN (Con caché TTL de 15s para alta concurrencia):
+          const cacheKey = `auth_user:${userId}`;
+          let liveUser = await this.cacheService.get<any>(cacheKey);
+          if (!liveUser) {
+            liveUser = await prisma.tenantUser.findUnique({
+              where: { id: userId },
+              include: { tenant: true },
+            });
+            if (liveUser) {
+              await this.cacheService.set(cacheKey, liveUser, 15);
+            }
+          }
 
           if (!liveUser || !liveUser.isActive) {
             throw new UnauthorizedException('La cuenta de usuario está desactivada o ha sido eliminada.');

@@ -203,6 +203,8 @@ export class BillingService {
   private readonly logger = new Logger(BillingService.name);
   private readonly subscriptionsFallback = new Map<string, SubscriptionState>();
   private plansSeeded = false;
+  private plansCache: { data: PlanConfig[]; expiresAt: number } | null = null;
+  private settingsCache: { data: PlatformPaymentConfig; expiresAt: number } | null = null;
 
   private async ensureDefaultPlans(): Promise<void> {
     if (this.plansSeeded) return;
@@ -233,6 +235,9 @@ export class BillingService {
   }
 
   public async getPaymentSettings(): Promise<PlatformPaymentConfig> {
+    if (this.settingsCache && this.settingsCache.expiresAt > Date.now()) {
+      return this.settingsCache.data;
+    }
     try {
       const latest = await prisma.auditLog.findFirst({
         where: {
@@ -243,7 +248,7 @@ export class BillingService {
       });
 
       const saved = (latest?.newPayload || {}) as Partial<PlatformPaymentConfig>;
-      return {
+      const resolved: PlatformPaymentConfig = {
         ...DEFAULT_PAYMENT_SETTINGS,
         ...saved,
         planLinks: {
@@ -260,6 +265,8 @@ export class BillingService {
             ? saved.bankAccounts
             : DEFAULT_PAYMENT_SETTINGS.bankAccounts,
       };
+      this.settingsCache = { data: resolved, expiresAt: Date.now() + 60_000 };
+      return resolved;
     } catch {
       return DEFAULT_PAYMENT_SETTINGS;
     }
@@ -299,10 +306,15 @@ export class BillingService {
       },
     });
 
+    this.settingsCache = null;
+    this.plansCache = null;
     return merged;
   }
 
   public async getPlans(): Promise<PlanConfig[]> {
+    if (this.plansCache && this.plansCache.expiresAt > Date.now()) {
+      return this.plansCache.data;
+    }
     await this.ensureDefaultPlans();
     const settings = await this.getPaymentSettings();
 
@@ -312,7 +324,7 @@ export class BillingService {
       });
 
       if (dbPlans.length > 0) {
-        return dbPlans.map((p) => {
+        const mapped: PlanConfig[] = dbPlans.map((p) => {
           const links = settings.planLinks?.[p.code] || { monthly: '', annual: '' };
           return {
             id: p.id,
@@ -331,6 +343,8 @@ export class BillingService {
             paymentLinkAnnual: links.annual || '',
           };
         });
+        this.plansCache = { data: mapped, expiresAt: Date.now() + 60_000 };
+        return mapped;
       }
     } catch {}
 
@@ -430,6 +444,8 @@ export class BillingService {
         },
       },
     });
+
+    this.plansCache = null;
 
     return {
       id: updated.id,
@@ -763,6 +779,28 @@ export class BillingService {
     this.logger.log(
       `[Billing] Solicitud de cambio de plan / orden ${invoiceNumber} (${createdPayment.id}) para ${tenantId}: ${targetPlan.code} ${billingCycle} DOP ${amount}`
     );
+
+    const miniPcWebhook = process.env.MINI_PC_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL;
+    if (miniPcWebhook) {
+      fetch(miniPcWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'plan_change_request',
+          source: 'factura.antek.com.do',
+          tenantId,
+          customerEmail: dto.customerEmail || '',
+          planCode: targetPlan.code,
+          planName: targetPlan.name,
+          billingCycle,
+          amountDop: amount,
+          invoiceNumber,
+          checkoutUrl,
+          timestamp: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(4000),
+      }).catch(() => {});
+    }
 
     return {
       paymentId: createdPayment.id,

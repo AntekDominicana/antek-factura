@@ -35,9 +35,11 @@ export const metadata: Metadata = {
       'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
     images: [
       {
-        url: '/og-cover.png',
+        url: 'https://factura.antek.com.do/og-cover.jpg',
+        secureUrl: 'https://factura.antek.com.do/og-cover.jpg',
         width: 1200,
         height: 630,
+        type: 'image/jpeg',
         alt: 'ANTEK Factura - Facturación Electrónica e-CF DGII',
       },
     ],
@@ -47,7 +49,7 @@ export const metadata: Metadata = {
     title: 'ANTEK Factura | Facturación Electrónica e-CF RD',
     description:
       'Emite facturas electrónicas e-CF, escanea gastos 606 y genera tus reportes 606/607 en minutos. Para negocios y contadores en República Dominicana.',
-    images: ['/og-cover.png'],
+    images: ['https://factura.antek.com.do/og-cover.jpg'],
   },
   appleWebApp: {
     capable: true,

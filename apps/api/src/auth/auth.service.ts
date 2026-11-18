@@ -198,6 +198,30 @@ export class AuthService {
       },
     });
 
+    const miniPcWebhook = process.env.MINI_PC_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL;
+    if (miniPcWebhook) {
+      fetch(miniPcWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'new_tenant_registered',
+          source: 'factura.antek.com.do',
+          tenant: {
+            id: tenant.id,
+            rnc: tenant.rnc,
+            razonSocial: tenant.razonSocial,
+            email: user.email,
+            fullName: user.fullName,
+            planCode: plan.code,
+            planName: plan.name,
+            priceDop: Number(plan.priceDop),
+          },
+          timestamp: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(4000),
+      }).catch(() => {});
+    }
+
     return {
       success: true,
       message: 'Empresa y usuario administrador registrados exitosamente.',

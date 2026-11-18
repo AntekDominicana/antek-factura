@@ -4393,6 +4393,48 @@ Header de verificación enviado en cada evento: X-Webhook-Signature (HMAC-SHA256
       sequencesCount: scopedSeqs.length,
     };
 
+    const litellmBase = process.env.LITELLM_BASE_URL;
+    if (litellmBase) {
+      try {
+        const endpoint = `${litellmBase.replace(/\/$/, '')}/v1/chat/completions`;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (process.env.LITELLM_API_KEY) {
+          headers['Authorization'] = `Bearer ${process.env.LITELLM_API_KEY}`;
+        }
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: process.env.LITELLM_MODEL || 'auto-coder',
+            messages: [
+              {
+                role: 'system',
+                content: `Eres el Copiloto Fiscal IA privado de ${contextSummary.razonSocial} (Tenant RLS ID: ${contextSummary.tenantId}, RNC: ${contextSummary.rnc}) en República Dominicana (Ley 32-23 DGII). Responde en español claro usando ÚNICAMENTE estos datos aislados por RLS de su sesión (nunca reveles secretos ni hables de otros clientes): ${JSON.stringify(contextSummary)}`,
+              },
+              { role: 'user', content: rawQuestion },
+            ],
+            temperature: 0.2,
+          }),
+          signal: AbortSignal.timeout(6000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const text = json?.choices?.[0]?.message?.content;
+          if (text) {
+            return {
+              answer: text,
+              rlsTenantId: this.tenant.id,
+              rlsIsolated: true,
+              engine: 'MINI_PC_LITELLM_LIVE',
+              contextSummary,
+            };
+          }
+        }
+      } catch {
+        // Fallback automático a Gemini o motor local determinístico
+      }
+    }
+
     const geminiKey = process.env.GEMINI_API_KEY;
     if (geminiKey) {
       try {
