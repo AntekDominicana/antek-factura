@@ -44,6 +44,105 @@ function getQueryParamCaseInsensitive(params: URLSearchParams, candidates: strin
   return '';
 }
 
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&aacute;/gi, 'á')
+    .replace(/&eacute;/gi, 'é')
+    .replace(/&iacute;/gi, 'í')
+    .replace(/&oacute;/gi, 'ó')
+    .replace(/&uacute;/gi, 'ú')
+    .replace(/&ntilde;/gi, 'ñ')
+    .replace(/&Aacute;/gi, 'Á')
+    .replace(/&Eacute;/gi, 'É')
+    .replace(/&Iacute;/gi, 'Í')
+    .replace(/&Oacute;/gi, 'Ó')
+    .replace(/&Uacute;/gi, 'Ú')
+    .replace(/&Ntilde;/gi, 'Ñ')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+function stripHtml(html: string): string {
+  return decodeHtmlEntities(html.replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+interface DgiiHtmlFields {
+  rncEmisor?: string;
+  razonSocialEmisor?: string;
+  rncComprador?: string;
+  razonSocialComprador?: string;
+  encf?: string;
+  fechaEmision?: string;
+  totalItbis?: number;
+  montoTotal?: number;
+  estadoDgii?: string;
+}
+
+async function fetchDgiiTimbreHtml(qrUrl: string): Promise<DgiiHtmlFields | null> {
+  try {
+    const parsed = new URL(qrUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (!host.endsWith('.dgii.gov.do') && host !== 'dgii.gov.do') return null;
+
+    const res = await fetch(parsed.toString(), {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AntekFactura/1.0)',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (!html || html.length < 50) return null;
+
+    const result: DgiiHtmlFields = {};
+    const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let rowMatch: RegExpExecArray | null;
+    while ((rowMatch = rowRegex.exec(html)) !== null) {
+      const cells: string[] = [];
+      const cellRegex = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+      let cellMatch: RegExpExecArray | null;
+      while ((cellMatch = cellRegex.exec(rowMatch[1])) !== null) {
+        cells.push(stripHtml(cellMatch[1]));
+      }
+      if (cells.length >= 2) {
+        const label = cells[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const value = cells[1].trim();
+        if (!value) continue;
+
+        if (label.includes('rnc emisor')) result.rncEmisor = value.replace(/\D/g, '');
+        else if (label.includes('razon social emisor')) result.razonSocialEmisor = value;
+        else if (label.includes('rnc comprador')) result.rncComprador = value.replace(/\D/g, '');
+        else if (label.includes('razon social comprador')) result.razonSocialComprador = value;
+        else if (label.includes('e-ncf') || label === 'encf' || label === 'ncf') result.encf = value.toUpperCase();
+        else if (label.includes('fecha de emision') || label.includes('fecha emision')) result.fechaEmision = value;
+        else if (label.includes('total de itbis') || label.includes('total itbis') || label === 'itbis') {
+          const num = parseFloat(value.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(num)) result.totalItbis = num;
+        } else if (label.includes('monto total')) {
+          const num = parseFloat(value.replace(/[^0-9.-]/g, ''));
+          if (!isNaN(num)) result.montoTotal = num;
+        } else if (label === 'estado' || label.includes('estado')) {
+          result.estadoDgii = value;
+        }
+      }
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 @Injectable()
 export class PurchasesService {
   private inMemoryPurchases: any[] = [];
@@ -70,19 +169,25 @@ export class PurchasesService {
       throw new BadRequestException('Formato de código QR / URL de DGII inválido.');
     }
 
-    const rncEmisor = getQueryParamCaseInsensitive(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']);
-    let rncComprador = getQueryParamCaseInsensitive(urlParams, ['RncComprador', 'RncComp', 'Comprador']);
-    const encf = getQueryParamCaseInsensitive(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
+    const rncEmisorRaw = getQueryParamCaseInsensitive(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']);
+    let rncComprador = getQueryParamCaseInsensitive(urlParams, ['RncComprador', 'RncComp', 'Comprador']).replace(/\D/g, '');
+    let razonSocialComprador =
+      getQueryParamCaseInsensitive(urlParams, ['RazonSocialComprador', 'NombreComprador', 'CompradorNombre']) ||
+      undefined;
+    const encfRaw = getQueryParamCaseInsensitive(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
     const montoTotalStr = getQueryParamCaseInsensitive(urlParams, ['MontoTotal', 'Total', 'Monto']);
     const totalItbisStr = getQueryParamCaseInsensitive(urlParams, ['TotalITBIS', 'ITBIS', 'MontoITBIS']);
     const rawFecha = getQueryParamCaseInsensitive(urlParams, ['FechaEmision', 'Fecha', 'FechaFirma']);
-    const fechaEmision = normalizeDgiiDate(rawFecha);
+    let fechaEmision = normalizeDgiiDate(rawFecha);
     const codigoSeguridad =
       getQueryParamCaseInsensitive(urlParams, ['CodigoSeguridad', 'CodSeguridad', 'Seguridad']) || undefined;
 
-    if (!rncEmisor || !encf) {
+    if (!rncEmisorRaw || !encfRaw) {
       throw new BadRequestException('El QR escaneado no contiene los parámetros fiscales mínimos requeridos (RNC Emisor y e-NCF).');
     }
+
+    let rncEmisor = rncEmisorRaw.replace(/\D/g, '');
+    let encf = encfRaw;
 
     let tipoEcf = 31;
     if (encf.startsWith('E')) {
@@ -97,47 +202,73 @@ export class PurchasesService {
       }
     }
 
-    const parsedMonto = parseFloat(montoTotalStr.replace(/,/g, '')) || 0;
+    let parsedMonto = parseFloat(montoTotalStr.replace(/,/g, '')) || 0;
     const parsedItbisRaw = totalItbisStr ? parseFloat(totalItbisStr.replace(/,/g, '')) : NaN;
-    const parsedItbis = !isNaN(parsedItbisRaw) ? parsedItbisRaw : 0;
+    let parsedItbis = !isNaN(parsedItbisRaw) ? parsedItbisRaw : 0;
 
-    let razonSocialEmisor = `RNC ${rncEmisor.replace(/\D/g, '')}`;
+    let razonSocialEmisor = `RNC ${rncEmisor}`;
     try {
       const emisorData = this.rncService.lookup(rncEmisor);
-      if (emisorData?.razonSocial) {
+      if (emisorData?.razonSocial && !emisorData.razonSocial.startsWith('EMPRESA REGISTRADA RNC ')) {
         razonSocialEmisor = emisorData.razonSocial;
       }
     } catch {}
 
-    let razonSocialComprador: string | undefined = undefined;
-    if (tenantId) {
-      try {
-        const tenant = await prisma.tenant.findUnique({
-          where: { id: tenantId },
-          select: { rnc: true, razonSocial: true },
-        });
-        if (tenant) {
-          if (!rncComprador) rncComprador = tenant.rnc;
-          if (rncComprador.replace(/\D/g, '') === tenant.rnc.replace(/\D/g, '')) {
-            razonSocialComprador = tenant.razonSocial;
-          }
+    let estadoDgii = 'Aceptado';
+    if (urlString.startsWith('http://') || urlString.startsWith('https://')) {
+      const dgiiHtml = await fetchDgiiTimbreHtml(urlString);
+      if (dgiiHtml) {
+        if (dgiiHtml.rncEmisor) rncEmisor = dgiiHtml.rncEmisor;
+        if (dgiiHtml.razonSocialEmisor) razonSocialEmisor = dgiiHtml.razonSocialEmisor;
+        if (dgiiHtml.rncComprador) rncComprador = dgiiHtml.rncComprador;
+        if (dgiiHtml.razonSocialComprador) razonSocialComprador = dgiiHtml.razonSocialComprador;
+        if (dgiiHtml.encf) encf = dgiiHtml.encf;
+        if (dgiiHtml.fechaEmision) fechaEmision = normalizeDgiiDate(dgiiHtml.fechaEmision);
+        if (dgiiHtml.totalItbis !== undefined && (isNaN(parsedItbisRaw) || parsedItbis === 0)) {
+          parsedItbis = dgiiHtml.totalItbis;
         }
-      } catch {}
+        if (dgiiHtml.montoTotal !== undefined && dgiiHtml.montoTotal > 0 && parsedMonto === 0) {
+          parsedMonto = dgiiHtml.montoTotal;
+        }
+        if (dgiiHtml.estadoDgii) estadoDgii = dgiiHtml.estadoDgii;
+      }
     }
 
     if (rncComprador && !razonSocialComprador) {
-      try {
-        const compradorData = this.rncService.lookup(rncComprador);
-        razonSocialComprador = compradorData.razonSocial;
-      } catch {
+      if (tenantId) {
+        try {
+          const tenant = await prisma.tenant.findUnique({
+            where: { id: tenantId },
+            select: { rnc: true, razonSocial: true },
+          });
+          if (tenant && rncComprador === tenant.rnc.replace(/\D/g, '')) {
+            razonSocialComprador = tenant.razonSocial;
+          }
+        } catch {}
+      }
+
+      if (!razonSocialComprador) {
+        try {
+          const compradorData = this.rncService.lookup(rncComprador);
+          if (compradorData?.razonSocial && !compradorData.razonSocial.startsWith('EMPRESA REGISTRADA RNC ')) {
+            razonSocialComprador = compradorData.razonSocial;
+          }
+        } catch {}
+      }
+
+      if (!razonSocialComprador) {
         razonSocialComprador = `RNC ${rncComprador}`;
       }
     }
 
+    if (!rncComprador && !razonSocialComprador) {
+      razonSocialComprador = 'Consumidor Final / No especificado';
+    }
+
     return {
-      rncEmisor: rncEmisor.replace(/\D/g, ''),
+      rncEmisor,
       razonSocialEmisor,
-      rncComprador: rncComprador.replace(/\D/g, ''),
+      rncComprador,
       razonSocialComprador,
       encf,
       tipoEcf,
@@ -145,7 +276,7 @@ export class PurchasesService {
       montoTotal: parsedMonto,
       totalItbis: parsedItbis,
       codigoSeguridad,
-      estadoDgii: 'Aceptado',
+      estadoDgii,
     };
   }
 
@@ -170,11 +301,21 @@ export class PurchasesService {
     if (payload.qrRaw && payload.qrRaw.trim()) {
       parsed = await this.parseDgiiQr(payload.qrRaw, tenantId);
       if (payload.rncEmisor) parsed.rncEmisor = payload.rncEmisor.replace(/\D/g, '');
-      if (payload.razonSocialEmisor?.trim()) parsed.razonSocialEmisor = payload.razonSocialEmisor.trim();
+      if (
+        payload.razonSocialEmisor?.trim() &&
+        !/^RNC\s+\d+$/i.test(payload.razonSocialEmisor.trim()) &&
+        !/^EMPRESA REGISTRADA RNC\s+\d+$/i.test(payload.razonSocialEmisor.trim())
+      ) {
+        parsed.razonSocialEmisor = payload.razonSocialEmisor.trim();
+      }
       if (payload.encf?.trim()) parsed.encf = payload.encf.trim().toUpperCase();
       if (payload.fechaEmision?.trim()) parsed.fechaEmision = payload.fechaEmision.trim();
-      if (payload.montoTotal !== undefined) parsed.montoTotal = Number(payload.montoTotal);
-      if (payload.totalItbis !== undefined) parsed.totalItbis = Number(payload.totalItbis);
+      if (payload.montoTotal !== undefined && Number(payload.montoTotal) > 0) {
+        parsed.montoTotal = Number(payload.montoTotal);
+      }
+      if (payload.totalItbis !== undefined && Number(payload.totalItbis) > 0) {
+        parsed.totalItbis = Number(payload.totalItbis);
+      }
     } else {
       const cleanRnc = (payload.rncEmisor || '').replace(/\D/g, '');
       const cleanEncf = (payload.encf || '').trim().toUpperCase();
@@ -185,7 +326,8 @@ export class PurchasesService {
       let resolvedName = payload.razonSocialEmisor?.trim() || '';
       if (!resolvedName) {
         try {
-          resolvedName = this.rncService.lookup(cleanRnc).razonSocial;
+          const looked = this.rncService.lookup(cleanRnc).razonSocial;
+          resolvedName = looked.startsWith('EMPRESA REGISTRADA RNC ') ? `RNC ${cleanRnc}` : looked;
         } catch {
           resolvedName = `RNC ${cleanRnc}`;
         }
@@ -197,21 +339,11 @@ export class PurchasesService {
         if (!isNaN(t)) tipoEcf = t;
       }
 
-      let rncComprador = '';
-      let razonSocialComprador: string | undefined;
-      try {
-        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { rnc: true, razonSocial: true } });
-        if (tenant) {
-          rncComprador = tenant.rnc;
-          razonSocialComprador = tenant.razonSocial;
-        }
-      } catch {}
-
       parsed = {
         rncEmisor: cleanRnc,
         razonSocialEmisor: resolvedName,
-        rncComprador,
-        razonSocialComprador,
+        rncComprador: '',
+        razonSocialComprador: 'No especificado',
         encf: cleanEncf,
         tipoEcf,
         fechaEmision: payload.fechaEmision?.trim() || new Date().toISOString().split('T')[0],
@@ -252,6 +384,14 @@ export class PurchasesService {
       );
     }
 
+    const qrMetadataJson = JSON.stringify({
+      source: 'DGII_QR',
+      qrRaw: payload.qrRaw || null,
+      rncComprador: parsed.rncComprador || '',
+      razonSocialComprador: parsed.razonSocialComprador || '',
+      estadoDgii: parsed.estadoDgii || 'Aceptado',
+    });
+
     let purchase: any;
     try {
       purchase = await prisma.receivedPurchase.create({
@@ -265,6 +405,7 @@ export class PurchasesService {
           montoTotal: parsed.montoTotal,
           totalItbis: parsed.totalItbis,
           tipoGasto606: tipoGasto,
+          xmlContent: qrMetadataJson,
           commercialStatus: 'PENDING',
         },
       });
@@ -286,6 +427,7 @@ export class PurchasesService {
         montoTotal: parsed.montoTotal,
         totalItbis: parsed.totalItbis,
         tipoGasto606: tipoGasto,
+        xmlContent: qrMetadataJson,
         commercialStatus: 'PENDING',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -297,7 +439,12 @@ export class PurchasesService {
     return {
       success: true,
       message: 'Comprobante de gasto guardado exitosamente en el Libro Contable (606).',
-      purchase,
+      purchase: {
+        ...purchase,
+        rncComprador: parsed.rncComprador || '',
+        razonSocialComprador: parsed.razonSocialComprador || '',
+        estadoDgii: parsed.estadoDgii || 'Aceptado',
+      },
       verifiedDgii: {
         rncEmisor: parsed.rncEmisor,
         razonSocialEmisor: parsed.razonSocialEmisor,
@@ -307,7 +454,7 @@ export class PurchasesService {
         fechaEmision: parsed.fechaEmision,
         totalItbis: parsed.totalItbis,
         montoTotal: parsed.montoTotal,
-        estado: 'Aceptado',
+        estado: parsed.estadoDgii || 'Aceptado',
       },
     };
   }
@@ -530,15 +677,42 @@ export class PurchasesService {
     let totalCompras = 0;
     let totalItbis = 0;
 
-    purchases.forEach((p: any) => {
+    const enrichedPurchases = purchases.map((p: any) => {
       totalCompras += Number(p.montoTotal);
       totalItbis += Number(p.totalItbis);
+
+      let rncComprador = '';
+      let razonSocialComprador = '';
+      let estadoDgii = 'Aceptado';
+
+      if (typeof p.xmlContent === 'string' && p.xmlContent.trim().startsWith('{')) {
+        try {
+          const meta = JSON.parse(p.xmlContent);
+          if (meta?.source === 'DGII_QR') {
+            rncComprador = meta.rncComprador || '';
+            razonSocialComprador = meta.razonSocialComprador || '';
+            estadoDgii = meta.estadoDgii || 'Aceptado';
+          }
+        } catch {}
+      } else if (typeof p.xmlContent === 'string' && p.xmlContent.includes('<')) {
+        const rncCompMatch = p.xmlContent.match(/<RNCComprador>([^<]+)<\/RNCComprador>/i);
+        const razonCompMatch = p.xmlContent.match(/<RazonSocialComprador>([^<]+)<\/RazonSocialComprador>/i);
+        if (rncCompMatch) rncComprador = rncCompMatch[1].trim();
+        if (razonCompMatch) razonSocialComprador = razonCompMatch[1].trim();
+      }
+
+      return {
+        ...p,
+        rncComprador,
+        razonSocialComprador,
+        estadoDgii,
+      };
     });
 
     return {
-      purchases,
+      purchases: enrichedPurchases,
       summary: {
-        totalRecords: purchases.length,
+        totalRecords: enrichedPurchases.length,
         totalCompras,
         totalItbisDeducible: totalItbis,
       },

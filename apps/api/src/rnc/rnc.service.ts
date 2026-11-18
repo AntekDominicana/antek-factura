@@ -141,7 +141,7 @@ export class RncService {
     // Registro sintético válido para contribuyentes dados de alta
     return {
       rnc: clean,
-      razonSocial: clean.length === 9 ? `EMPRESA REGISTRADA RNC ${clean}` : `CONTRIBUYENTE CEDULA ${clean}`,
+      razonSocial: clean.length === 9 ? `RNC ${clean}` : `Cédula ${clean}`,
       nombreComercial: clean.length === 9 ? `COMERCIAL ${clean}` : undefined,
       estado: 'ACTIVO',
       tipo: clean.length === 9 ? 'PERSONA_JURIDICA' : 'PERSONA_FISICA',

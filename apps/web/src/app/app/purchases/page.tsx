@@ -33,6 +33,9 @@ interface PurchaseItem {
   id: string;
   rncEmisor: string;
   razonSocialEmisor: string;
+  rncComprador?: string;
+  razonSocialComprador?: string;
+  estadoDgii?: string;
   encf: string;
   tipoEcf: number;
   fechaEmision: string;
@@ -347,6 +350,12 @@ function PurchasesContent() {
           ? new URL(input).searchParams
           : new URLSearchParams(input.includes('?') ? input.split('?')[1] : input);
         const rncEmisor = getQueryParamCI(urlParams, ['RncEmisor', 'RncEmis', 'Emisor']).replace(/\D/g, '');
+        const rncComprador = getQueryParamCI(urlParams, ['RncComprador', 'RncComp', 'Comprador']).replace(/\D/g, '');
+        const razonSocialCompradorParam = getQueryParamCI(urlParams, [
+          'RazonSocialComprador',
+          'NombreComprador',
+          'CompradorNombre',
+        ]);
         const encf = getQueryParamCI(urlParams, ['ENCF', 'eNCF', 'NCF']).toUpperCase();
         const montoTotal = parseFloat(
           getQueryParamCI(urlParams, ['MontoTotal', 'Total', 'Monto']).replace(/,/g, '') || '0'
@@ -362,8 +371,10 @@ function PurchasesContent() {
           localParsed = {
             rncEmisor,
             razonSocialEmisor: `RNC ${rncEmisor}`,
-            rncComprador: tenant?.rnc || '',
-            razonSocialComprador: tenant?.razonSocial || 'Tu Empresa',
+            rncComprador,
+            razonSocialComprador:
+              razonSocialCompradorParam ||
+              (rncComprador ? `RNC ${rncComprador}` : 'Consumidor Final / No especificado'),
             encf,
             fechaEmision,
             totalItbis: isNaN(totalItbis) ? 0 : totalItbis,
@@ -400,8 +411,9 @@ function PurchasesContent() {
           }
 
           playScanTone('ok');
+          const itemId = `${localParsed.rncEmisor}-${localParsed.encf}-${Date.now()}`;
           const newItem: QueuedQrItem = {
-            id: `${localParsed.rncEmisor}-${localParsed.encf}-${Date.now()}`,
+            id: itemId,
             qrRaw: rawQrText,
             rncEmisor: localParsed.rncEmisor,
             razonSocialEmisor: localParsed.razonSocialEmisor,
@@ -415,6 +427,33 @@ function PurchasesContent() {
           setSuccessMsg(
             `✓ #${scanQueueRef.current.length + 1} agregada al lote: ${localParsed.encf} — DOP $${localParsed.montoTotal.toFixed(2)}`
           );
+
+          // Enriquecer en segundo plano con datos reales de DGII (Razón Social e ITBIS)
+          apiFetch('/v1/purchases/parse-qr', {
+            method: 'POST',
+            body: JSON.stringify({ qrRaw: rawQrText }),
+          })
+            .then((res) => res?.parsed)
+            .then((enriched) => {
+              if (!enriched) return;
+              setScanQueue((prev) =>
+                prev.map((q) =>
+                  q.id === itemId
+                    ? {
+                        ...q,
+                        razonSocialEmisor: enriched.razonSocialEmisor || q.razonSocialEmisor,
+                        totalItbis:
+                          enriched.totalItbis !== undefined ? Number(enriched.totalItbis) : q.totalItbis,
+                        montoTotal:
+                          enriched.montoTotal !== undefined && Number(enriched.montoTotal) > 0
+                            ? Number(enriched.montoTotal)
+                            : q.montoTotal,
+                      }
+                    : q
+                )
+              );
+            })
+            .catch(() => {});
           return;
         }
 
@@ -1148,13 +1187,14 @@ function PurchasesContent() {
                             setVerifModalData({
                               rncEmisor: p.rncEmisor,
                               razonSocialEmisor: p.razonSocialEmisor,
-                              rncComprador: tenant?.rnc || '—',
-                              razonSocialComprador: tenant?.razonSocial || 'Tu Empresa',
+                              rncComprador: p.rncComprador || 'No especificado',
+                              razonSocialComprador:
+                                p.razonSocialComprador || 'No especificado en comprobante',
                               encf: p.encf,
                               fechaEmision: p.fechaEmision,
                               totalItbis: Number(p.totalItbis),
                               montoTotal: Number(p.montoTotal),
-                              estado: 'Aceptado',
+                              estado: p.estadoDgii || 'Aceptado',
                             })
                           }
                           title="Ver Timbre de Verificación DGII"
