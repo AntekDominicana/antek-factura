@@ -23,6 +23,7 @@ const CURL_POS_32 = `curl -X POST ${PUBLIC_ORIGIN}/api/v1/invoices \\
   -d '{
     "external_id": "ORD-POS-00481",
     "tipo_ecf": 32,
+    "precio_incluye_itbis": false,
     "items": [
       {
         "descripcion": "Combo Hamburguesa Clásica + Papas",

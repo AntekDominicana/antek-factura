@@ -224,6 +224,7 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
           `      <UnidadMedida>${item.unidadMedida || 43}</UnidadMedida>`,
           `      <PrecioUnitarioItem>${item.precioUnitarioItem.toFixed(2)}</PrecioUnitarioItem>`,
           item.descuentoMonto ? `      <DescuentoMonto>${item.descuentoMonto.toFixed(2)}</DescuentoMonto>` : '',
+          item.recargoMonto ? `      <RecargoMonto>${item.recargoMonto.toFixed(2)}</RecargoMonto>` : '',
           `      <MontoItem>${(item.montoItem || 0).toFixed(2)}</MontoItem>`,
           `    </Item>`,
         ]

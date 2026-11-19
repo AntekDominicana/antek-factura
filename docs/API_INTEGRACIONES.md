@@ -27,6 +27,7 @@ Envía una venta desde cualquier POS o tienda web hecha en código. ANTEK Factur
 
 - **Idempotencia:** La combinación `(empresa_id, origen, external_id)` es única. Si vuelves a enviar la misma venta con el mismo `external_id`, devuelve HTTP **`200`** con la factura ya emitida y **NO** emite otro e-CF.
 - **Emisión nueva:** Devuelve HTTP **`201`**.
+- **`precio_incluye_itbis` (boolean, opcional, por defecto `false`):** Si tu POS cobra con impuestos ya incluidos en el precio unitario, envía `"precio_incluye_itbis": true` (y `"descuento"` en `%`). Extraemos base imponible e ITBIS por resta exacta y cuadramos centavos de redondeo con `<RecargoMonto>` / `<DescuentoMonto>` en el XML de la DGII para que el total coincida exacto con tu POS.
 
 #### Ejemplo e-CF 32 (Consumo / POS)
 ```bash

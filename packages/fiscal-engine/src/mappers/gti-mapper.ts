@@ -245,6 +245,9 @@ export class GtiMapper {
       if (item.descuentoMonto && item.descuentoMonto > 0) {
         gtiItem.DescuentoMonto = item.descuentoMonto;
       }
+      if (item.recargoMonto && item.recargoMonto > 0) {
+        gtiItem.RecargoMonto = item.recargoMonto;
+      }
       if (item.codigoItem) {
         gtiItem.TablaCodigosItem = [
           {

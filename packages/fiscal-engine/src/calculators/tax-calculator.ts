@@ -64,6 +64,8 @@ export class TaxCalculator {
     let sumGravadoI1 = 0;
     let sumGravadoI2 = 0;
     let sumGravadoI3 = 0;
+    let sumItbisI1 = 0;
+    let sumItbisI2 = 0;
     let sumExento = 0;
     let sumNoFacturable = 0;
     let sumRetenidoItbis = 0;
@@ -96,10 +98,24 @@ export class TaxCalculator {
         case IndicadorFacturacion.ITBIS_18:
           hasGravadoI1 = true;
           sumGravadoI1 += montoItem;
+          if (invoice.precioIncluyeItbis) {
+            const lineItbis =
+              item.itbisLinea !== undefined
+                ? round2(item.itbisLinea)
+                : round2((item.totalLinea ?? round2(montoItem * 1.18)) - montoItem);
+            sumItbisI1 += lineItbis;
+          }
           break;
         case IndicadorFacturacion.ITBIS_16:
           hasGravadoI2 = true;
           sumGravadoI2 += montoItem;
+          if (invoice.precioIncluyeItbis) {
+            const lineItbis =
+              item.itbisLinea !== undefined
+                ? round2(item.itbisLinea)
+                : round2((item.totalLinea ?? round2(montoItem * 1.16)) - montoItem);
+            sumItbisI2 += lineItbis;
+          }
           break;
         case IndicadorFacturacion.ITBIS_0:
           hasGravadoI3 = true;
@@ -150,13 +166,17 @@ export class TaxCalculator {
     if (hasGravadoI1) {
       totales.montoGravadoI1 = round2(sumGravadoI1);
       totales.itbis1 = 18;
-      totales.totalItbis1 = round2(totales.montoGravadoI1 * 0.18);
+      totales.totalItbis1 = invoice.precioIncluyeItbis
+        ? round2(sumItbisI1)
+        : round2(totales.montoGravadoI1 * 0.18);
     }
 
     if (hasGravadoI2) {
       totales.montoGravadoI2 = round2(sumGravadoI2);
       totales.itbis2 = 16;
-      totales.totalItbis2 = round2(totales.montoGravadoI2 * 0.16);
+      totales.totalItbis2 = invoice.precioIncluyeItbis
+        ? round2(sumItbisI2)
+        : round2(totales.montoGravadoI2 * 0.16);
     }
 
     if (hasGravadoI3) {

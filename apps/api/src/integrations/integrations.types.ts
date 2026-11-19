@@ -14,17 +14,28 @@ export interface PublicInvoiceItemInput {
   cantidad: number;
   precio_unitario: number;
   itbis_tasa: ItbisRate;
-  descuento?: number;
+  descuento?: number; // % (0-100) si precio_incluye_itbis=true, o monto si false
 }
 
 export interface PublicInvoiceCreateInput {
   external_id: string;
   tipo_ecf?: 31 | 32;
+  precio_incluye_itbis?: boolean;
   comprador?: PublicInvoiceBuyerInput;
   items: PublicInvoiceItemInput[];
   forma_pago: PublicPaymentMethod;
   canal?: PublicSalesChannel;
   notas?: string;
+}
+
+export interface TaxInclusiveLineBreakdown {
+  total_linea: number;
+  base_linea: number;
+  itbis_linea: number;
+  precio_unitario_sin_itbis: number;
+  recargoMonto: number;
+  descuentoMonto: number;
+  montoItem: number;
 }
 
 export interface PublicInvoiceResponse {

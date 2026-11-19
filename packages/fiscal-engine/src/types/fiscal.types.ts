@@ -71,6 +71,8 @@ export interface DomainInvoiceItem {
   descuentoMonto?: number;
   recargoMonto?: number;
   montoItem?: number; // Calculado
+  itbisLinea?: number; // Desglose exacto cuando precioIncluyeItbis = true
+  totalLinea?: number;
   montoItbisRetenido?: number;
   montoIsrRetenido?: number;
   indicadorAgenteRetencion?: number; // 1: R, 2: P
@@ -141,6 +143,7 @@ export interface DomainInvoice {
   items: DomainInvoiceItem[];
   references?: DomainReference[];
   otraMoneda?: DomainOtraMoneda;
+  precioIncluyeItbis?: boolean;
 
   // Totales (opcional si se calculan con TaxCalculator)
   totalesCalculados?: {
@@ -269,6 +272,7 @@ export interface GtiDetalleItem {
   UnidadMedida?: number;
   PrecioUnitarioItem: number;
   DescuentoMonto?: number;
+  RecargoMonto?: number;
   TablaSubDescuento?: Array<{
     TipoSubDescuento: string;
     SubDescuentoPorcentaje?: number;

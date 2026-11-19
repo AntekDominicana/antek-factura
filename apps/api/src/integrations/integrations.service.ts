@@ -26,8 +26,10 @@ import {
   ExternalSaleOrigin,
   ItbisRate,
   PublicInvoiceCreateInput,
+  PublicInvoiceItemInput,
   PublicInvoiceResponse,
   PublicPaymentMethod,
+  TaxInclusiveLineBreakdown,
 } from './integrations.types';
 import { mapUberEatsOrderToInvoiceInput } from './mappers/ubereats.mapper';
 import { mapPedidosYaOrderToInvoiceInput } from './mappers/pedidosya.mapper';
@@ -361,6 +363,17 @@ export class IntegrationsService implements OnModuleInit {
       }
     }
 
+    let precioIncluyeItbis = false;
+    if (body.precio_incluye_itbis !== undefined && body.precio_incluye_itbis !== null) {
+      if (typeof body.precio_incluye_itbis !== 'boolean') {
+        fail(
+          'precio_incluye_itbis debe ser un valor booleano (true o false).',
+          'precio_incluye_itbis'
+        );
+      }
+      precioIncluyeItbis = body.precio_incluye_itbis;
+    }
+
     if (!Array.isArray(body.items) || body.items.length === 0) {
       fail('items debe contener al menos una línea de producto o servicio.', 'items');
     }
@@ -406,16 +419,29 @@ export class IntegrationsService implements OnModuleInit {
       let descuento = 0;
       if (item.descuento !== undefined && item.descuento !== null) {
         descuento = Number(item.descuento);
-        const lineGross = cantidad * precioUnitario;
-        if (!Number.isFinite(descuento) || descuento < 0 || descuento > lineGross + 0.01) {
-          fail(
-            `El descuento es inválido en la línea ${idx + 1} (debe estar entre 0 y el subtotal de la línea).`,
-            `items[${idx}].descuento`
-          );
+        if (precioIncluyeItbis) {
+          if (!Number.isFinite(descuento) || descuento < 0 || descuento > 100) {
+            fail(
+              `Cuando precio_incluye_itbis es true, descuento representa porcentaje (0 a 100) en la línea ${idx + 1}.`,
+              `items[${idx}].descuento`
+            );
+          }
+        } else {
+          const lineGross = cantidad * precioUnitario;
+          if (!Number.isFinite(descuento) || descuento < 0 || descuento > lineGross + 0.01) {
+            fail(
+              `El descuento es inválido en la línea ${idx + 1} (debe estar entre 0 y el subtotal de la línea).`,
+              `items[${idx}].descuento`
+            );
+          }
         }
       }
 
-      netSubtotal += cantidad * precioUnitario - descuento;
+      if (precioIncluyeItbis) {
+        netSubtotal += this.round2(precioUnitario * cantidad * (1 - descuento / 100));
+      } else {
+        netSubtotal += cantidad * precioUnitario - descuento;
+      }
 
       return {
         descripcion: descripcion.slice(0, 200),
@@ -458,6 +484,7 @@ export class IntegrationsService implements OnModuleInit {
     return {
       external_id: externalId,
       tipo_ecf: tipoEcf,
+      precio_incluye_itbis: precioIncluyeItbis,
       ...(buyerRncClean || buyerNombre
         ? { comprador: { rnc: buyerRncClean, nombre: buyerNombre } }
         : {}),
@@ -465,6 +492,43 @@ export class IntegrationsService implements OnModuleInit {
       forma_pago: formaPago,
       ...(canal ? { canal } : {}),
       ...(notas ? { notas } : {}),
+    };
+  }
+
+  private round2(value: number): number {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  }
+
+  /**
+   * Extrae base imponible e ITBIS desde precio unitario con impuesto incluido.
+   * Calcula itbis_linea por resta exacta (total_linea - base_linea) y ajusta
+   * centavos de redondeo unitario usando RecargoMonto / DescuentoMonto para que
+   * MontoItem == base_linea exactamente en el XML XSD de DGII (31 y 32).
+   */
+  public calculateTaxInclusiveLine(item: PublicInvoiceItemInput): TaxInclusiveLineBreakdown {
+    const descuentoPct = Number(item.descuento || 0);
+    const total_linea = this.round2(
+      item.precio_unitario * item.cantidad * (1 - descuentoPct / 100)
+    );
+    const divisor = 1 + item.itbis_tasa / 100;
+    const base_linea = this.round2(total_linea / divisor);
+    const itbis_linea = this.round2(total_linea - base_linea);
+
+    const precio_unitario_sin_itbis = this.round2(base_linea / item.cantidad);
+    const subtotal_xml = this.round2(precio_unitario_sin_itbis * item.cantidad);
+    const delta = this.round2(base_linea - subtotal_xml);
+
+    const recargoMonto = delta > 0 ? delta : 0;
+    const descuentoMonto = delta < 0 ? Math.abs(delta) : 0;
+
+    return {
+      total_linea,
+      base_linea,
+      itbis_linea,
+      precio_unitario_sin_itbis,
+      recargoMonto,
+      descuentoMonto,
+      montoItem: base_linea,
     };
   }
 
@@ -487,12 +551,15 @@ export class IntegrationsService implements OnModuleInit {
     }
   }
 
-  private toDomainInvoice(input: PublicInvoiceCreateInput): DomainInvoice {
+  public toDomainInvoice(input: PublicInvoiceCreateInput): DomainInvoice {
     const tipoEcf = input.tipo_ecf === 31 ? EcfType.CREDITO_FISCAL : EcfType.CONSUMO;
+    const precioIncluyeItbis = Boolean(input.precio_incluye_itbis);
+
     return {
       tipoEcf,
       externalDocId: input.external_id,
-      indicadorMontoGravado: 0,
+      indicadorMontoGravado: 0, // El XML se expresa siempre en base sin ITBIS + ajuste de línea
+      precioIncluyeItbis,
       tipoIngresos: '01',
       tipoPago: TipoPago.CONTADO,
       formaPago: this.mapPaymentMethodToDgii(input.forma_pago),
@@ -506,16 +573,36 @@ export class IntegrationsService implements OnModuleInit {
           : {
               razonSocialComprador: 'Consumidor Final',
             },
-      items: input.items.map((item, idx) => ({
-        numeroLinea: idx + 1,
-        indicadorFacturacion: this.mapItbisRateToDgiiIndicator(item.itbis_tasa),
-        indicadorBienServicio: IndicadorBienServicio.BIEN,
-        nombreItem: item.descripcion.slice(0, 80),
-        descripcionItem: item.descripcion,
-        cantidadItem: item.cantidad,
-        precioUnitarioItem: item.precio_unitario,
-        descuentoMonto: item.descuento || 0,
-      })),
+      items: input.items.map((item, idx) => {
+        if (!precioIncluyeItbis) {
+          return {
+            numeroLinea: idx + 1,
+            indicadorFacturacion: this.mapItbisRateToDgiiIndicator(item.itbis_tasa),
+            indicadorBienServicio: IndicadorBienServicio.BIEN,
+            nombreItem: item.descripcion.slice(0, 80),
+            descripcionItem: item.descripcion,
+            cantidadItem: item.cantidad,
+            precioUnitarioItem: item.precio_unitario,
+            descuentoMonto: item.descuento || 0,
+          };
+        }
+
+        const calc = this.calculateTaxInclusiveLine(item);
+        return {
+          numeroLinea: idx + 1,
+          indicadorFacturacion: this.mapItbisRateToDgiiIndicator(item.itbis_tasa),
+          indicadorBienServicio: IndicadorBienServicio.BIEN,
+          nombreItem: item.descripcion.slice(0, 80),
+          descripcionItem: item.descripcion,
+          cantidadItem: item.cantidad,
+          precioUnitarioItem: calc.precio_unitario_sin_itbis,
+          descuentoMonto: calc.descuentoMonto,
+          recargoMonto: calc.recargoMonto,
+          montoItem: calc.base_linea,
+          itbisLinea: calc.itbis_linea,
+          totalLinea: calc.total_linea,
+        };
+      }),
     };
   }
 
@@ -555,8 +642,106 @@ export class IntegrationsService implements OnModuleInit {
   }
 
   // ============================================================================
-  // 3. EMISIÓN UNIFICADA CON IDEMPOTENCIA Y TRAZABILIDAD EN ventas_externas
+  // 3. EMISIÓN UNIFICADA CON IDEMPOTENCIA CONCURRENTE Y TRAZABILIDAD EN ventas_externas
   // ============================================================================
+
+  private isUniqueConstraintError(err: any): boolean {
+    if (err?.code === 'P2002') return true;
+    const msg = String(err?.message || '').toLowerCase();
+    return msg.includes('unique constraint') || msg.includes('duplicate key');
+  }
+
+  private async resolveExistingEmittedSale(
+    tenantId: string,
+    origen: ExternalSaleOrigin,
+    sale: { externalId: string; ecfId: string | null; encf: string | null }
+  ): Promise<{
+    statusCode: 200;
+    idempotent: true;
+    data: PublicInvoiceResponse;
+  } | null> {
+    if (sale.ecfId) {
+      try {
+        const existingInvoice = await this.fiscalService.getInvoiceById(sale.ecfId, tenantId);
+        return {
+          statusCode: 200 as const,
+          idempotent: true,
+          data: this.formatPublicInvoiceResponse(existingInvoice, {
+            externalId: sale.externalId,
+            origen,
+          }),
+        };
+      } catch {}
+    }
+
+    if (sale.encf) {
+      try {
+        const byEncf = await this.fiscalService.getInvoiceById(sale.encf, tenantId);
+        return {
+          statusCode: 200 as const,
+          idempotent: true,
+          data: this.formatPublicInvoiceResponse(byEncf, {
+            externalId: sale.externalId,
+            origen,
+          }),
+        };
+      } catch {}
+    }
+
+    return null;
+  }
+
+  private async waitForInFlightSale(
+    tenantId: string,
+    origen: ExternalSaleOrigin,
+    externalId: string
+  ) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const latest = await prisma.externalSale.findUnique({
+        where: {
+          empresa_origen_external_unique: {
+            tenantId,
+            origen,
+            externalId,
+          },
+        },
+      });
+      if (!latest) break;
+      if (latest.estado === 'emitido') {
+        const resolved = await this.resolveExistingEmittedSale(tenantId, origen, latest);
+        if (resolved) return resolved;
+      }
+      if (latest.estado === 'error') {
+        throw new BadRequestException({
+          error: latest.errorDetalle || 'La emisión concurrente previa falló.',
+          campo: 'external_id',
+        });
+      }
+    }
+
+    const fallback = await prisma.externalSale.findUnique({
+      where: {
+        empresa_origen_external_unique: {
+          tenantId,
+          origen,
+          externalId,
+        },
+      },
+    });
+    if (fallback && fallback.estado === 'emitido') {
+      const resolved = await this.resolveExistingEmittedSale(tenantId, origen, fallback);
+      if (resolved) return resolved;
+    }
+
+    throw new HttpException(
+      {
+        error: 'Venta en proceso por otra petición concurrente. Consulta nuevamente con external_id.',
+        campo: 'external_id',
+      },
+      HttpStatus.CONFLICT
+    );
+  }
 
   public async emitExternalInvoice(
     tenantId: string,
@@ -570,11 +755,25 @@ export class IntegrationsService implements OnModuleInit {
   }> {
     await this.ensureIntegrationSchema();
     const validated = this.validatePublicInvoiceInput(rawPayload);
-    const lockKey = `ext:${tenantId}:${origen}:${validated.external_id}`;
 
-    return this.securityShield.withSequenceLock(lockKey, async () => {
-      // 1. Idempotencia estricta por (empresa_id, origen, external_id)
-      const existingSale = await prisma.externalSale.findUnique({
+    // 1. Intento de reserva atómica mediante llave única (empresa_id, origen, external_id)
+    let saleRecord: any = null;
+    try {
+      saleRecord = await prisma.externalSale.create({
+        data: {
+          tenantId,
+          origen,
+          externalId: validated.external_id,
+          payloadOriginal: rawPayload as any,
+          estado: 'pendiente',
+        },
+      });
+    } catch (createErr: any) {
+      if (!this.isUniqueConstraintError(createErr)) {
+        throw createErr;
+      }
+
+      const existing = await prisma.externalSale.findUnique({
         where: {
           empresa_origen_external_unique: {
             tenantId,
@@ -584,39 +783,35 @@ export class IntegrationsService implements OnModuleInit {
         },
       });
 
-      if (existingSale && existingSale.estado === 'emitido' && existingSale.ecfId) {
-        try {
-          const existingInvoice = await this.fiscalService.getInvoiceById(
-            existingSale.ecfId,
-            tenantId
-          );
-          return {
-            statusCode: 200 as const,
-            idempotent: true,
-            data: this.formatPublicInvoiceResponse(existingInvoice, {
-              externalId: existingSale.externalId,
-              origen,
-            }),
-          };
-        } catch {
-          if (existingSale.encf) {
-            const byEncf = await this.fiscalService
-              .getInvoiceById(existingSale.encf, tenantId)
-              .catch(() => null);
-            if (byEncf) {
-              return {
-                statusCode: 200 as const,
-                idempotent: true,
-                data: this.formatPublicInvoiceResponse(byEncf, {
-                  externalId: existingSale.externalId,
-                  origen,
-                }),
-              };
-            }
-          }
-        }
+      if (existing?.estado === 'emitido') {
+        const resolved = await this.resolveExistingEmittedSale(tenantId, origen, existing);
+        if (resolved) return resolved;
       }
 
+      if (existing?.estado === 'pendiente') {
+        return this.waitForInFlightSale(tenantId, origen, validated.external_id);
+      }
+
+      if (existing && existing.estado === 'error') {
+        const claimed = await prisma.externalSale.updateMany({
+          where: { id: existing.id, estado: 'error' },
+          data: {
+            payloadOriginal: rawPayload as any,
+            estado: 'pendiente',
+            errorDetalle: null,
+          },
+        });
+        if (claimed.count === 0) {
+          return this.waitForInFlightSale(tenantId, origen, validated.external_id);
+        }
+        saleRecord = existing;
+      } else {
+        return this.waitForInFlightSale(tenantId, origen, validated.external_id);
+      }
+    }
+
+    const lockKey = `ext:${tenantId}:${origen}:${validated.external_id}`;
+    return this.securityShield.withSequenceLock(lockKey, async () => {
       // 2. Validar plan activo, acceso API y límite de comprobantes (402 o 403 claro)
       try {
         await this.billingService.checkEmissionAllowed(
@@ -625,12 +820,20 @@ export class IntegrationsService implements OnModuleInit {
           isApiKeyRequest
         );
       } catch (err: any) {
+        const status = err instanceof HttpException ? err.getStatus() : 403;
+        const resp = err instanceof HttpException ? (err.getResponse() as any) : null;
+        const msg = resp?.message || 'Tu plan actual no permite emitir este comprobante vía API.';
+        await prisma.externalSale
+          .update({
+            where: { id: saleRecord.id },
+            data: { estado: 'error', errorDetalle: String(msg).slice(0, 1000) },
+          })
+          .catch(() => undefined);
+
         if (err instanceof HttpException) {
-          const status = err.getStatus();
-          const resp = err.getResponse() as any;
           throw new HttpException(
             {
-              error: resp?.message || 'Tu plan actual no permite emitir este comprobante vía API.',
+              error: msg,
               codigo: resp?.code || 'PLAN_RESTRICTION',
               campo: 'plan',
             },
@@ -640,30 +843,7 @@ export class IntegrationsService implements OnModuleInit {
         throw err;
       }
 
-      // 3. Registrar intento en tabla de trazabilidad ventas_externas
-      const saleRecord = await prisma.externalSale.upsert({
-        where: {
-          empresa_origen_external_unique: {
-            tenantId,
-            origen,
-            externalId: validated.external_id,
-          },
-        },
-        update: {
-          payloadOriginal: rawPayload as any,
-          estado: 'pendiente',
-          errorDetalle: null,
-        },
-        create: {
-          tenantId,
-          origen,
-          externalId: validated.external_id,
-          payloadOriginal: rawPayload as any,
-          estado: 'pendiente',
-        },
-      });
-
-      // 4. Reutilizar función central FiscalService.emitInvoice (sin duplicar lógica fiscal)
+      // 3. Reutilizar función central FiscalService.emitInvoice (sin duplicar lógica fiscal)
       try {
         const domainInvoice = this.toDomainInvoice(validated);
         const emitted = await this.fiscalService.emitInvoice(domainInvoice, {
@@ -688,7 +868,7 @@ export class IntegrationsService implements OnModuleInit {
           origen,
         });
 
-        // 5. Webhook saliente en segundo plano con 3 reintentos
+        // 4. Webhook saliente en segundo plano con 3 reintentos
         this.scheduleOutgoingWebhook(tenantId, 'invoice.emitted', formatted);
 
         return {
