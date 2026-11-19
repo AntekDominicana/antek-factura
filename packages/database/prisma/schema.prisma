@@ -646,18 +646,22 @@ model ExternalSale {
 }
 
 model DeliveryConnection {
-  id              String   @id @default(uuid())
-  tenantId        String   @map("empresa_id")
-  plataforma      String   // 'ubereats' | 'pedidosya'
-  storeId         String   @map("store_id")
-  activo          Boolean  @default(true)
-  emitirEnEstado  String   @default("DELIVERED") @map("emitir_en_estado")
-  incluirEnvio    Boolean  @default(true) @map("incluir_envio")
-  incluirPropina  Boolean  @default(true) @map("incluir_propina")
-  createdAt       DateTime @default(now()) @map("creada_en")
-  updatedAt       DateTime @updatedAt @map("actualizada_en")
+  id                String   @id @default(uuid())
+  tenantId          String   @map("empresa_id")
+  plataforma        String   // 'ubereats' | 'pedidosya'
+  storeId           String   @map("store_id")
+  activo            Boolean  @default(true)
+  entorno           String   @default("sandbox") // 'sandbox' | 'production'
+  clientIdEnc       String?  @map("client_id_enc")
+  clientSecretEnc   String?  @map("client_secret_enc")
+  webhookSecretEnc  String?  @map("webhook_secret_enc")
+  emitirEnEstado    String   @default("DELIVERED") @map("emitir_en_estado")
+  incluirEnvio      Boolean  @default(true) @map("incluir_envio")
+  incluirPropina    Boolean  @default(true) @map("incluir_propina")
+  createdAt         DateTime @default(now()) @map("creada_en")
+  updatedAt         DateTime @updatedAt @map("actualizada_en")
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([plataforma, storeId], name: "plataforma_store_unique")
   @@index([tenantId, plataforma])

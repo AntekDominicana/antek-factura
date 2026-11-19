@@ -16,6 +16,11 @@ import {
   Activity,
   ExternalLink,
   PlugZap,
+  Eye,
+  EyeOff,
+  Lock,
+  Play,
+  Pencil,
 } from 'lucide-react';
 import { apiFetch } from '../../../../lib/api';
 
@@ -34,9 +39,14 @@ interface DeliveryConnectionItem {
   plataforma: 'ubereats' | 'pedidosya';
   store_id: string;
   activo: boolean;
+  entorno?: 'sandbox' | 'production';
   emitir_en_estado: string;
   incluir_envio: boolean;
   incluir_propina: boolean;
+  has_client_id?: boolean;
+  has_client_secret?: boolean;
+  has_webhook_secret?: boolean;
+  credenciales_configuradas?: boolean;
   creada_en: string;
 }
 
@@ -85,6 +95,13 @@ export default function DevelopersSettingsPage() {
   const [deliveryConnections, setDeliveryConnections] = useState<DeliveryConnectionItem[]>([]);
   const [plataforma, setPlataforma] = useState<'ubereats' | 'pedidosya'>('ubereats');
   const [storeId, setStoreId] = useState('');
+  const [entorno, setEntorno] = useState<'sandbox' | 'production'>('sandbox');
+  const [deliveryClientId, setDeliveryClientId] = useState('');
+  const [deliveryClientSecret, setDeliveryClientSecret] = useState('');
+  const [deliveryWebhookSecret, setDeliveryWebhookSecret] = useState('');
+  const [showDeliverySecrets, setShowDeliverySecrets] = useState(false);
+  const [editingDeliveryId, setEditingDeliveryId] = useState<string | null>(null);
+  const [testingDeliveryId, setTestingDeliveryId] = useState<string | null>(null);
   const [emitirEnEstado, setEmitirEnEstado] = useState('DELIVERED');
   const [incluirEnvio, setIncluirEnvio] = useState(true);
   const [incluirPropina, setIncluirPropina] = useState(true);
@@ -203,19 +220,64 @@ export default function DevelopersSettingsPage() {
         body: JSON.stringify({
           plataforma,
           store_id: storeId.trim(),
+          entorno,
           activo: true,
           emitir_en_estado: emitirEnEstado,
           incluir_envio: incluirEnvio,
           incluir_propina: incluirPropina,
+          ...(deliveryClientId.trim() ? { client_id: deliveryClientId.trim() } : {}),
+          ...(deliveryClientSecret.trim() ? { client_secret: deliveryClientSecret.trim() } : {}),
+          ...(deliveryWebhookSecret.trim()
+            ? { webhook_secret: deliveryWebhookSecret.trim() }
+            : {}),
         }),
       });
       setStoreId('');
-      flashSuccess(`Conexión ${plataforma === 'ubereats' ? 'Uber Eats' : 'PedidosYa'} guardada.`);
+      setDeliveryClientId('');
+      setDeliveryClientSecret('');
+      setDeliveryWebhookSecret('');
+      setEditingDeliveryId(null);
+      flashSuccess(
+        `Conexión y credenciales cifradas (AES-256) de ${
+          plataforma === 'ubereats' ? 'Uber Eats' : 'PedidosYa'
+        } guardadas correctamente.`
+      );
       await loadSummary();
     } catch (err: any) {
       setErrorMsg(extractErr(err, 'No se pudo guardar la conexión de delivery.'));
     } finally {
       setSavingDelivery(false);
+    }
+  };
+
+  const handleEditDelivery = (conn: DeliveryConnectionItem) => {
+    setEditingDeliveryId(conn.id);
+    setPlataforma(conn.plataforma);
+    setStoreId(conn.store_id);
+    setEntorno((conn.entorno || 'sandbox') as 'sandbox' | 'production');
+    setEmitirEnEstado(conn.emitir_en_estado || 'DELIVERED');
+    setIncluirEnvio(conn.incluir_envio);
+    setIncluirPropina(conn.incluir_propina);
+    setDeliveryClientId('');
+    setDeliveryClientSecret('');
+    setDeliveryWebhookSecret('');
+  };
+
+  const handleTestDelivery = async (conn: DeliveryConnectionItem) => {
+    setTestingDeliveryId(conn.id);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch<any>(`/v1/integrations/delivery/${conn.id}/test`, {
+        method: 'POST',
+      });
+      flashSuccess(
+        `Prueba exitosa (${conn.plataforma.toUpperCase()}): e-CF ${res.encf || res.id} emitido por RD$${res.total}.`
+      );
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'No se pudo completar la prueba de emisión.'));
+    } finally {
+      setTestingDeliveryId(null);
     }
   };
 
@@ -227,6 +289,7 @@ export default function DevelopersSettingsPage() {
         body: JSON.stringify({
           plataforma: conn.plataforma,
           store_id: conn.store_id,
+          entorno: conn.entorno || 'sandbox',
           activo: !conn.activo,
           emitir_en_estado: conn.emitir_en_estado,
           incluir_envio: conn.incluir_envio,
@@ -235,7 +298,7 @@ export default function DevelopersSettingsPage() {
       });
       await loadSummary();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Error actualizando el estado de la tienda.');
+      setErrorMsg(extractErr(err, 'Error actualizando el estado de la tienda.'));
     }
   };
 
@@ -481,72 +544,178 @@ export default function DevelopersSettingsPage() {
           ))}
         </div>
 
-        <form onSubmit={handleSaveDelivery} className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-1">
-          <div>
-            <label className="block text-[11px] font-bold text-slate-600 mb-1">Plataforma</label>
-            <select
-              value={plataforma}
-              onChange={(e) => setPlataforma(e.target.value as 'ubereats' | 'pedidosya')}
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
-            >
-              <option value="ubereats">Uber Eats</option>
-              <option value="pedidosya">PedidosYa</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold text-slate-600 mb-1">Store ID en Plataforma</label>
-            <input
-              type="text"
-              required
-              placeholder="ej. ue_store_12345"
-              value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold text-slate-600 mb-1">Estado disparador</label>
-            <select
-              value={emitirEnEstado}
-              onChange={(e) => setEmitirEnEstado(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
-            >
-              <option value="DELIVERED">DELIVERED (Entregado)</option>
-              <option value="CONFIRMED">CONFIRMED (Confirmado)</option>
-            </select>
-          </div>
-          <div className="flex items-end">
+        <form onSubmit={handleSaveDelivery} className="space-y-4 p-4 rounded-xl bg-slate-50 border border-slate-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+              <Lock className="w-3.5 h-3.5 text-sky-600" />
+              <span>
+                {editingDeliveryId
+                  ? `Editando credenciales de ${storeId} (deja vacíos los secrets que no quieras cambiar)`
+                  : 'Conectar tienda y guardar credenciales propias (cifradas AES-256-GCM)'}
+              </span>
+            </div>
             <button
-              type="submit"
-              disabled={savingDelivery || !storeId.trim()}
-              className="w-full px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 transition"
+              type="button"
+              onClick={() => setShowDeliverySecrets(!showDeliverySecrets)}
+              className="text-[11px] font-bold text-slate-600 hover:text-sky-600 inline-flex items-center gap-1"
             >
-              <PlugZap className="w-3.5 h-3.5" />
-              <span>{savingDelivery ? 'Guardando...' : 'Conectar Tienda'}</span>
+              {showDeliverySecrets ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              <span>{showDeliverySecrets ? 'Ocultar claves' : 'Mostrar claves'}</span>
             </button>
           </div>
-        </form>
 
-        <div className="flex flex-wrap gap-4 text-xs text-slate-700">
-          <label className="inline-flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={incluirEnvio}
-              onChange={(e) => setIncluirEnvio(e.target.checked)}
-              className="rounded-sm border-slate-300 text-sky-600"
-            />
-            <span>Facturar envío como línea separada</span>
-          </label>
-          <label className="inline-flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={incluirPropina}
-              onChange={(e) => setIncluirPropina(e.target.checked)}
-              className="rounded-sm border-slate-300 text-sky-600"
-            />
-            <span>Facturar propina como línea separada exenta</span>
-          </label>
-        </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Plataforma</label>
+              <select
+                value={plataforma}
+                onChange={(e) => setPlataforma(e.target.value as 'ubereats' | 'pedidosya')}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
+              >
+                <option value="ubereats">Uber Eats</option>
+                <option value="pedidosya">PedidosYa</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Store ID en Plataforma</label>
+              <input
+                type="text"
+                required
+                placeholder="ej. ue_store_12345"
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Entorno</label>
+              <select
+                value={entorno}
+                onChange={(e) => setEntorno(e.target.value as 'sandbox' | 'production')}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
+              >
+                <option value="sandbox">Sandbox (Pruebas)</option>
+                <option value="production">Producción (En Vivo)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Estado disparador</label>
+              <select
+                value={emitirEnEstado}
+                onChange={(e) => setEmitirEnEstado(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
+              >
+                <option value="DELIVERED">DELIVERED (Entregado)</option>
+                <option value="CONFIRMED">CONFIRMED (Confirmado)</option>
+              </select>
+            </div>
+          </div>
+
+          {plataforma === 'ubereats' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Uber Client ID <span className="text-slate-400 font-normal">(para consultar Order API)</span>
+                </label>
+                <input
+                  type={showDeliverySecrets ? 'text' : 'password'}
+                  placeholder="Uber Eats Client ID"
+                  value={deliveryClientId}
+                  onChange={(e) => setDeliveryClientId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Uber Client Secret <span className="text-slate-400 font-normal">(firma X-Uber-Signature + OAuth)</span>
+                </label>
+                <input
+                  type={showDeliverySecrets ? 'text' : 'password'}
+                  placeholder="Uber Eats Client Secret"
+                  value={deliveryClientSecret}
+                  onChange={(e) => setDeliveryClientSecret(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 bg-white"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  PedidosYa Webhook Secret / Token Partner
+                </label>
+                <input
+                  type={showDeliverySecrets ? 'text' : 'password'}
+                  placeholder="Secret configurado en PedidosYa Partner Portal"
+                  value={deliveryWebhookSecret}
+                  onChange={(e) => setDeliveryWebhookSecret(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  PedidosYa Client ID / API Key <span className="text-slate-400 font-normal">(opcional)</span>
+                </label>
+                <input
+                  type={showDeliverySecrets ? 'text' : 'password'}
+                  placeholder="Client ID o Token adicional (opcional)"
+                  value={deliveryClientId}
+                  onChange={(e) => setDeliveryClientId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800 bg-white"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap gap-4 text-xs text-slate-700">
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={incluirEnvio}
+                  onChange={(e) => setIncluirEnvio(e.target.checked)}
+                  className="rounded-sm border-slate-300 text-sky-600"
+                />
+                <span>Facturar envío como línea separada</span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={incluirPropina}
+                  onChange={(e) => setIncluirPropina(e.target.checked)}
+                  className="rounded-sm border-slate-300 text-sky-600"
+                />
+                <span>Facturar propina como línea separada exenta</span>
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {editingDeliveryId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingDeliveryId(null);
+                    setStoreId('');
+                    setDeliveryClientId('');
+                    setDeliveryClientSecret('');
+                    setDeliveryWebhookSecret('');
+                  }}
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-bold"
+                >
+                  Cancelar
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={savingDelivery || !storeId.trim()}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 transition"
+              >
+                <PlugZap className="w-3.5 h-3.5" />
+                <span>{savingDelivery ? 'Guardando...' : editingDeliveryId ? 'Actualizar Credenciales' : 'Guardar y Conectar'}</span>
+              </button>
+            </div>
+          </div>
+        </form>
 
         {deliveryConnections.length > 0 && (
           <div className="overflow-x-auto border border-slate-200 rounded-xl">
@@ -555,7 +724,7 @@ export default function DevelopersSettingsPage() {
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
                   <th className="px-3.5 py-2">Plataforma</th>
                   <th className="px-3.5 py-2">Store ID</th>
-                  <th className="px-3.5 py-2">Opciones</th>
+                  <th className="px-3.5 py-2">Credenciales &amp; Entorno</th>
                   <th className="px-3.5 py-2">Estado</th>
                   <th className="px-3.5 py-2 text-right">Acciones</th>
                 </tr>
@@ -563,13 +732,35 @@ export default function DevelopersSettingsPage() {
               <tbody className="divide-y divide-slate-100">
                 {deliveryConnections.map((c) => (
                   <tr key={c.id}>
-                    <td className="px-3.5 py-2 font-bold uppercase text-slate-800">{c.plataforma}</td>
-                    <td className="px-3.5 py-2 font-mono text-slate-700">{c.store_id}</td>
-                    <td className="px-3.5 py-2 text-slate-500">
-                      Estado: {c.emitir_en_estado} · Envío: {c.incluir_envio ? 'Sí' : 'No'} · Propina:{' '}
-                      {c.incluir_propina ? 'Sí' : 'No'}
+                    <td className="px-3.5 py-2.5 font-bold uppercase text-slate-800">{c.plataforma}</td>
+                    <td className="px-3.5 py-2.5 font-mono text-slate-700">{c.store_id}</td>
+                    <td className="px-3.5 py-2.5 space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={`px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                            c.entorno === 'production'
+                              ? 'bg-sky-50 text-sky-700'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {c.entorno || 'sandbox'}
+                        </span>
+                        {c.credenciales_configuradas ? (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-[10px]">
+                            Credenciales Propias (AES-256) ✓
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-bold text-[10px]">
+                            Faltan credenciales
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Dispara: {c.emitir_en_estado} · Envío: {c.incluir_envio ? 'Sí' : 'No'} · Propina:{' '}
+                        {c.incluir_propina ? 'Sí' : 'No'}
+                      </div>
                     </td>
-                    <td className="px-3.5 py-2">
+                    <td className="px-3.5 py-2.5">
                       <button
                         type="button"
                         onClick={() => handleToggleDelivery(c)}
@@ -582,11 +773,28 @@ export default function DevelopersSettingsPage() {
                         {c.activo ? 'Activo' : 'Pausado'}
                       </button>
                     </td>
-                    <td className="px-3.5 py-2 text-right">
+                    <td className="px-3.5 py-2.5 text-right space-x-2 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleTestDelivery(c)}
+                        disabled={testingDeliveryId === c.id}
+                        className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold text-[11px] inline-flex items-center gap-1"
+                      >
+                        <Play className="w-3 h-3" />
+                        <span>{testingDeliveryId === c.id ? 'Probando...' : 'Probar'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleEditDelivery(c)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] inline-flex items-center gap-1"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        <span>Editar</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteDelivery(c.id)}
-                        className="text-red-600 hover:text-red-700 font-bold"
+                        className="text-red-600 hover:text-red-700 font-bold text-[11px]"
                       >
                         Eliminar
                       </button>

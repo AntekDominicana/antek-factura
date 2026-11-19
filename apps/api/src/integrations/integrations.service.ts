@@ -107,6 +107,10 @@ export class IntegrationsService implements OnModuleInit {
           "plataforma" TEXT NOT NULL,
           "store_id" TEXT NOT NULL,
           "activo" BOOLEAN NOT NULL DEFAULT true,
+          "entorno" TEXT NOT NULL DEFAULT 'sandbox',
+          "client_id_enc" TEXT,
+          "client_secret_enc" TEXT,
+          "webhook_secret_enc" TEXT,
           "emitir_en_estado" TEXT NOT NULL DEFAULT 'DELIVERED',
           "incluir_envio" BOOLEAN NOT NULL DEFAULT true,
           "incluir_propina" BOOLEAN NOT NULL DEFAULT true,
@@ -116,6 +120,13 @@ export class IntegrationsService implements OnModuleInit {
           CONSTRAINT "conexiones_delivery_empresa_id_fkey"
             FOREIGN KEY ("empresa_id") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
         );
+      `);
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "conexiones_delivery"
+          ADD COLUMN IF NOT EXISTS "entorno" TEXT NOT NULL DEFAULT 'sandbox',
+          ADD COLUMN IF NOT EXISTS "client_id_enc" TEXT,
+          ADD COLUMN IF NOT EXISTS "client_secret_enc" TEXT,
+          ADD COLUMN IF NOT EXISTS "webhook_secret_enc" TEXT;
       `);
       await prisma.$executeRawUnsafe(`
         CREATE UNIQUE INDEX IF NOT EXISTS "conexiones_delivery_plataforma_store_id_key"
@@ -804,12 +815,64 @@ export class IntegrationsService implements OnModuleInit {
   // 4. CONECTORES DELIVERY: UBER EATS Y PEDIDOSYA
   // ============================================================================
 
-  public verifyUberWebhookSignature(rawBody: Buffer | undefined, signatureHeader?: string): void {
-    const secret = process.env.UBER_CLIENT_SECRET;
+  private safeDecrypt(encVal?: string | null): string | undefined {
+    if (!encVal) return undefined;
+    try {
+      return this.cryptoService.decrypt(encVal);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private extractUberStoreId(payload: any): string {
+    return String(
+      payload?.meta?.user_id ||
+        payload?.store_id ||
+        payload?.store?.id ||
+        payload?.order?.store?.id ||
+        ''
+    ).trim();
+  }
+
+  private extractPedidosYaStoreId(payload: any): string {
+    const order = payload?.order || payload?.data || payload;
+    return String(
+      order?.storeId ||
+        order?.store_id ||
+        order?.restaurant?.id ||
+        order?.shop?.id ||
+        order?.vendor?.id ||
+        payload?.storeId ||
+        ''
+    ).trim();
+  }
+
+  public async verifyUberWebhookSignature(
+    rawBody: Buffer | undefined,
+    signatureHeader?: string,
+    payload?: any
+  ): Promise<void> {
+    await this.ensureIntegrationSchema();
+    const storeId = this.extractUberStoreId(payload);
+    let tenantSecret: string | undefined;
+
+    if (storeId) {
+      const conn = await prisma.deliveryConnection.findUnique({
+        where: { plataforma_store_unique: { plataforma: 'ubereats', storeId } },
+        select: { clientSecretEnc: true, webhookSecretEnc: true, activo: true },
+      });
+      if (conn?.activo) {
+        tenantSecret =
+          this.safeDecrypt(conn.webhookSecretEnc) || this.safeDecrypt(conn.clientSecretEnc);
+      }
+    }
+
+    const secret = tenantSecret || process.env.UBER_CLIENT_SECRET;
     if (!secret) {
       throw new HttpException(
         {
-          error: 'UBER_CLIENT_SECRET no está configurado en el servidor.',
+          error:
+            'UBER_CLIENT_SECRET no está configurado ni en la tienda conectada ni en el servidor.',
           campo: 'X-Uber-Signature',
         },
         HttpStatus.UNAUTHORIZED
@@ -850,7 +913,11 @@ export class IntegrationsService implements OnModuleInit {
     });
   }
 
-  private async fetchUberOrderDetailsIfNeeded(orderId: string, payload: any): Promise<any> {
+  private async fetchUberOrderDetailsIfNeeded(
+    orderId: string,
+    payload: any,
+    connection?: { clientIdEnc?: string | null; clientSecretEnc?: string | null; entorno?: string }
+  ): Promise<any> {
     if (
       Array.isArray(payload?.cart?.items) ||
       Array.isArray(payload?.order?.cart?.items) ||
@@ -859,13 +926,15 @@ export class IntegrationsService implements OnModuleInit {
       return payload;
     }
 
-    const clientId = process.env.UBER_CLIENT_ID;
-    const clientSecret = process.env.UBER_CLIENT_SECRET;
+    const clientId = this.safeDecrypt(connection?.clientIdEnc) || process.env.UBER_CLIENT_ID;
+    const clientSecret =
+      this.safeDecrypt(connection?.clientSecretEnc) || process.env.UBER_CLIENT_SECRET;
     if (!clientId || !clientSecret || !orderId) {
       return payload;
     }
 
-    const isProd = String(process.env.UBER_ENV || 'sandbox').toLowerCase() === 'production';
+    const envName = String(connection?.entorno || process.env.UBER_ENV || 'sandbox').toLowerCase();
+    const isProd = envName === 'production';
     const loginUrl = isProd
       ? 'https://login.uber.com/oauth/v2/token'
       : 'https://sandbox-login.uber.com/oauth/v2/token';
@@ -912,13 +981,7 @@ export class IntegrationsService implements OnModuleInit {
         payload?.id ||
         ''
     ).trim();
-    const storeId = String(
-      payload?.meta?.user_id ||
-        payload?.store_id ||
-        payload?.store?.id ||
-        payload?.order?.store?.id ||
-        ''
-    ).trim();
+    const storeId = this.extractUberStoreId(payload);
 
     if (!storeId || !orderId) {
       this.logger.warn('[UberEats] Webhook recibido sin store_id u order_id identificable.');
@@ -946,7 +1009,7 @@ export class IntegrationsService implements OnModuleInit {
       return this.handleDeliveryCancellation(connection.tenantId, 'ubereats', orderId, payload);
     }
 
-    const orderData = await this.fetchUberOrderDetailsIfNeeded(orderId, payload);
+    const orderData = await this.fetchUberOrderDetailsIfNeeded(orderId, payload, connection);
     const orderStatus = String(
       orderData?.current_state || orderData?.status || statusStr || ''
     ).toUpperCase();
@@ -988,12 +1051,31 @@ export class IntegrationsService implements OnModuleInit {
     return this.emitExternalInvoice(connection.tenantId, 'ubereats', mapped, false);
   }
 
-  public verifyPedidosYaWebhookSecret(headers: Record<string, any>): void {
-    const expected = process.env.PEDIDOSYA_WEBHOOK_SECRET;
+  public async verifyPedidosYaWebhookSecret(
+    headers: Record<string, any>,
+    payload?: any
+  ): Promise<void> {
+    await this.ensureIntegrationSchema();
+    const storeId = this.extractPedidosYaStoreId(payload);
+    let tenantSecret: string | undefined;
+
+    if (storeId) {
+      const conn = await prisma.deliveryConnection.findUnique({
+        where: { plataforma_store_unique: { plataforma: 'pedidosya', storeId } },
+        select: { webhookSecretEnc: true, clientSecretEnc: true, activo: true },
+      });
+      if (conn?.activo) {
+        tenantSecret =
+          this.safeDecrypt(conn.webhookSecretEnc) || this.safeDecrypt(conn.clientSecretEnc);
+      }
+    }
+
+    const expected = tenantSecret || process.env.PEDIDOSYA_WEBHOOK_SECRET;
     if (!expected) {
       throw new HttpException(
         {
-          error: 'PEDIDOSYA_WEBHOOK_SECRET no está configurado en el servidor.',
+          error:
+            'PEDIDOSYA_WEBHOOK_SECRET no está configurado ni en la tienda conectada ni en el servidor.',
           campo: 'X-PedidosYa-Signature',
         },
         HttpStatus.UNAUTHORIZED
@@ -1034,15 +1116,7 @@ export class IntegrationsService implements OnModuleInit {
     await this.ensureIntegrationSchema();
     const order = payload?.order || payload?.data || payload;
     const orderId = String(order?.id || order?.orderId || order?.code || '').trim();
-    const storeId = String(
-      order?.storeId ||
-        order?.store_id ||
-        order?.restaurant?.id ||
-        order?.shop?.id ||
-        order?.vendor?.id ||
-        payload?.storeId ||
-        ''
-    ).trim();
+    const storeId = this.extractPedidosYaStoreId(payload);
 
     if (!storeId || !orderId) {
       throw new HttpException(
@@ -1319,9 +1393,16 @@ export class IntegrationsService implements OnModuleInit {
         plataforma: c.plataforma,
         store_id: c.storeId,
         activo: c.activo,
+        entorno: c.entorno || 'sandbox',
         emitir_en_estado: c.emitirEnEstado,
         incluir_envio: c.incluirEnvio,
         incluir_propina: c.incluirPropina,
+        has_client_id: Boolean(c.clientIdEnc),
+        has_client_secret: Boolean(c.clientSecretEnc),
+        has_webhook_secret: Boolean(c.webhookSecretEnc),
+        credenciales_configuradas: Boolean(
+          c.clientSecretEnc || c.webhookSecretEnc || c.clientIdEnc
+        ),
         creada_en: c.createdAt.toISOString(),
       })),
       outgoingWebhook: activeWebhook
@@ -1360,6 +1441,10 @@ export class IntegrationsService implements OnModuleInit {
       plataforma?: string;
       store_id?: string;
       activo?: boolean;
+      entorno?: string;
+      client_id?: string;
+      client_secret?: string;
+      webhook_secret?: string;
       emitir_en_estado?: string;
       incluir_envio?: boolean;
       incluir_propina?: boolean;
@@ -1381,6 +1466,11 @@ export class IntegrationsService implements OnModuleInit {
       );
     }
 
+    const entorno =
+      String(body?.entorno || 'sandbox').toLowerCase() === 'production'
+        ? 'production'
+        : 'sandbox';
+
     const conflict = await prisma.deliveryConnection.findUnique({
       where: { plataforma_store_unique: { plataforma, storeId } },
     });
@@ -1394,10 +1484,30 @@ export class IntegrationsService implements OnModuleInit {
       );
     }
 
+    const clientIdPlain = typeof body.client_id === 'string' ? body.client_id.trim() : '';
+    const clientSecretPlain =
+      typeof body.client_secret === 'string' ? body.client_secret.trim() : '';
+    const webhookSecretPlain =
+      typeof body.webhook_secret === 'string' ? body.webhook_secret.trim() : '';
+
+    const clientIdEnc = clientIdPlain
+      ? this.cryptoService.encrypt(clientIdPlain)
+      : conflict?.clientIdEnc ?? null;
+    const clientSecretEnc = clientSecretPlain
+      ? this.cryptoService.encrypt(clientSecretPlain)
+      : conflict?.clientSecretEnc ?? null;
+    const webhookSecretEnc = webhookSecretPlain
+      ? this.cryptoService.encrypt(webhookSecretPlain)
+      : conflict?.webhookSecretEnc ?? null;
+
     const saved = await prisma.deliveryConnection.upsert({
       where: { plataforma_store_unique: { plataforma, storeId } },
       update: {
         activo: body.activo !== undefined ? Boolean(body.activo) : true,
+        entorno,
+        clientIdEnc,
+        clientSecretEnc,
+        webhookSecretEnc,
         emitirEnEstado: String(body.emitir_en_estado || 'DELIVERED').toUpperCase(),
         incluirEnvio: body.incluir_envio !== undefined ? Boolean(body.incluir_envio) : true,
         incluirPropina: body.incluir_propina !== undefined ? Boolean(body.incluir_propina) : true,
@@ -1407,6 +1517,10 @@ export class IntegrationsService implements OnModuleInit {
         plataforma,
         storeId,
         activo: body.activo !== undefined ? Boolean(body.activo) : true,
+        entorno,
+        clientIdEnc,
+        clientSecretEnc,
+        webhookSecretEnc,
         emitirEnEstado: String(body.emitir_en_estado || 'DELIVERED').toUpperCase(),
         incluirEnvio: body.incluir_envio !== undefined ? Boolean(body.incluir_envio) : true,
         incluirPropina: body.incluir_propina !== undefined ? Boolean(body.incluir_propina) : true,
@@ -1418,10 +1532,79 @@ export class IntegrationsService implements OnModuleInit {
       plataforma: saved.plataforma,
       store_id: saved.storeId,
       activo: saved.activo,
+      entorno: saved.entorno,
       emitir_en_estado: saved.emitirEnEstado,
       incluir_envio: saved.incluirEnvio,
       incluir_propina: saved.incluirPropina,
+      has_client_id: Boolean(saved.clientIdEnc),
+      has_client_secret: Boolean(saved.clientSecretEnc),
+      has_webhook_secret: Boolean(saved.webhookSecretEnc),
+      credenciales_configuradas: Boolean(
+        saved.clientSecretEnc || saved.webhookSecretEnc || saved.clientIdEnc
+      ),
       creada_en: saved.createdAt.toISOString(),
+    };
+  }
+
+  public async testDeliveryConnection(tenantId: string, connectionId: string) {
+    await this.ensureIntegrationSchema();
+    const conn = await prisma.deliveryConnection.findFirst({
+      where: { id: connectionId, tenantId },
+    });
+    if (!conn) {
+      throw new NotFoundException({ error: 'Conexión delivery no encontrada.', campo: 'id' });
+    }
+
+    const sampleOrderId = `TEST-${conn.plataforma.toUpperCase()}-${Date.now().toString().slice(-6)}`;
+    let mapped;
+    if (conn.plataforma === 'ubereats') {
+      mapped = mapUberEatsOrderToInvoiceInput(
+        {
+          id: sampleOrderId,
+          display_id: sampleOrderId.slice(-4),
+          store: { id: conn.storeId },
+          cart: {
+            items: [
+              { title: 'Menú Prueba Uber Eats', quantity: 1, price: { unit_price: 550 } },
+            ],
+          },
+          payment: { charges: { delivery_fee: 100, tip: 50 }, method: 'tarjeta' },
+        },
+        { incluirEnvio: conn.incluirEnvio, incluirPropina: conn.incluirPropina }
+      );
+    } else {
+      mapped = mapPedidosYaOrderToInvoiceInput(
+        {
+          id: sampleOrderId,
+          code: sampleOrderId.slice(-4),
+          storeId: conn.storeId,
+          status: 'DELIVERED',
+          products: [
+            { name: 'Menú Prueba PedidosYa', quantity: 1, unitPrice: 550, taxRate: 18 },
+          ],
+          deliveryFee: 100,
+          tip: 50,
+          paymentMethod: 'tarjeta',
+        },
+        { incluirEnvio: conn.incluirEnvio, incluirPropina: conn.incluirPropina }
+      );
+    }
+
+    const emitted = await this.emitExternalInvoice(
+      tenantId,
+      conn.plataforma as ExternalSaleOrigin,
+      mapped,
+      false
+    );
+
+    return {
+      success: true,
+      plataforma: conn.plataforma,
+      store_id: conn.storeId,
+      credenciales_configuradas: Boolean(
+        conn.clientSecretEnc || conn.webhookSecretEnc || conn.clientIdEnc
+      ),
+      ...emitted.data,
     };
   }
 

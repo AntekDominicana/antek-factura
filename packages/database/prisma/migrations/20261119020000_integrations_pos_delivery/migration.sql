@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS "conexiones_delivery" (
   "plataforma" TEXT NOT NULL,
   "store_id" TEXT NOT NULL,
   "activo" BOOLEAN NOT NULL DEFAULT true,
+  "entorno" TEXT NOT NULL DEFAULT 'sandbox',
+  "client_id_enc" TEXT,
+  "client_secret_enc" TEXT,
+  "webhook_secret_enc" TEXT,
   "emitir_en_estado" TEXT NOT NULL DEFAULT 'DELIVERED',
   "incluir_envio" BOOLEAN NOT NULL DEFAULT true,
   "incluir_propina" BOOLEAN NOT NULL DEFAULT true,
@@ -62,6 +66,12 @@ CREATE TABLE IF NOT EXISTS "conexiones_delivery" (
   CONSTRAINT "conexiones_delivery_empresa_id_fkey"
     FOREIGN KEY ("empresa_id") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+ALTER TABLE "conexiones_delivery"
+  ADD COLUMN IF NOT EXISTS "entorno" TEXT NOT NULL DEFAULT 'sandbox',
+  ADD COLUMN IF NOT EXISTS "client_id_enc" TEXT,
+  ADD COLUMN IF NOT EXISTS "client_secret_enc" TEXT,
+  ADD COLUMN IF NOT EXISTS "webhook_secret_enc" TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "conexiones_delivery_plataforma_store_id_key"
   ON "conexiones_delivery"("plataforma", "store_id");

@@ -92,7 +92,7 @@ export class DeliveryWebhooksController {
     const rawBody: Buffer = Buffer.isBuffer(req.rawBody)
       ? req.rawBody
       : Buffer.from(JSON.stringify(body || {}), 'utf8');
-    this.integrationsService.verifyUberWebhookSignature(rawBody, uberSignature);
+    await this.integrationsService.verifyUberWebhookSignature(rawBody, uberSignature, body);
     this.integrationsService.queueUberEatsWebhookProcessing(body);
     return { received: true, status: 'queued' };
   }
@@ -103,7 +103,7 @@ export class DeliveryWebhooksController {
     summary: 'Webhook receptor de PedidosYa (verifica secret y emite e-CF al estar DELIVERED)',
   })
   async receivePedidosYaWebhook(@Body() body: any, @Req() req: any) {
-    this.integrationsService.verifyPedidosYaWebhookSecret(req.headers || {});
+    await this.integrationsService.verifyPedidosYaWebhookSecret(req.headers || {}, body);
     return this.integrationsService.processPedidosYaWebhook(body);
   }
 }
@@ -140,6 +140,11 @@ export class TenantIntegrationsController {
   @Post('delivery')
   upsertDelivery(@Req() req: any, @Body() body: any) {
     return this.integrationsService.upsertDeliveryConnection(this.requireTenantId(req), body);
+  }
+
+  @Post('delivery/:id/test')
+  testDelivery(@Req() req: any, @Param('id') id: string) {
+    return this.integrationsService.testDeliveryConnection(this.requireTenantId(req), id);
   }
 
   @Delete('delivery/:id')
