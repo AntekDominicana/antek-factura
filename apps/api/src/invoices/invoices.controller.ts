@@ -376,18 +376,21 @@ export class InvoicesController {
   }
 
   @Get('accounting/purchases')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Listar compras y gastos recibidos para Formato 606' })
   getReceivedPurchases() {
     return this.fiscalService.getReceivedPurchases();
   }
 
   @Post('accounting/purchases')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Registrar factura de proveedor recibido para Formato 606 / IT-1 / IR-17' })
   registerReceivedPurchase(@Body() body: any) {
     return this.fiscalService.registerReceivedPurchase(body);
   }
 
   @Post('accounting/purchases/from-qr')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({
     summary: 'Registrar automáticamente factura de gasto en Formato 606 escaneando URL QR o texto Verificación e-NCF DGII',
   })
@@ -396,12 +399,14 @@ export class InvoicesController {
   }
 
   @Post('catalogs/customers')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Registrar un cliente real en el directorio del tenant' })
   addCustomer(@Body() body: any) {
     return this.fiscalService.addCustomer(body);
   }
 
   @Post('catalogs/products')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Registrar un producto o servicio real en el catálogo del tenant' })
   addProduct(@Body() body: any) {
     return this.fiscalService.addProduct(body);

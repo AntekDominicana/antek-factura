@@ -5,12 +5,86 @@ import { BillingService, PlatformPaymentConfig } from '../billing/billing.servic
 
 @Injectable()
 export class SuperAdminService {
+  private rolesNormalized = false;
+
   constructor(private readonly billingService: BillingService) {}
+
+  /**
+   * Garantiza en arranque que usuarios registrados sin promoción explícita tengan rol BILLER (Cliente),
+   * elimina filas sintéticas de prueba 2026-10 y ajusta plazos de gracia > 5 días a exactamente 5 días.
+   */
+  private async ensureClientRolesAndCleanTestRows(): Promise<void> {
+    if (this.rolesNormalized) return;
+    this.rolesNormalized = true;
+    try {
+      // 1. Limpiar las 3 compras sintéticas de octubre 2026 insertadas durante pruebas
+      await prisma.receivedPurchase.deleteMany({
+        where: {
+          encf: { in: ['E310013736109', 'E310008728229', 'E310003998900'] },
+        },
+      });
+
+      // 2. Pasar a BILLER (Cliente) usuarios antiguos con ADMIN que no hayan sido promovidos por SuperAdmin
+      const adminUsers = await prisma.tenantUser.findMany({
+        where: {
+          role: 'ADMIN',
+          email: { not: 'rootfacturas@antek.com.do' },
+        },
+        select: { id: true },
+      });
+
+      for (const u of adminUsers) {
+        const promotedLog = await prisma.auditLog.findFirst({
+          where: {
+            action: 'USER_ROLE_UPDATED_BY_SUPERADMIN',
+            entityId: u.id,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!promotedLog) {
+          await prisma.tenantUser.update({
+            where: { id: u.id },
+            data: { role: 'BILLER' },
+          });
+        }
+      }
+
+      // 3. Corregir suscripciones en gracia o sin pago con plazo mayor a 5 días
+      const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+      const subs = await prisma.subscription.findMany({
+        include: { payments: { where: { status: 'PAID' }, select: { id: true } } },
+      });
+      for (const s of subs) {
+        const hasPaid = s.payments.length > 0;
+        if (!hasPaid && s.status !== 'SUSPENDED') {
+          const tooLong =
+            s.currentPeriodEnd.getTime() > Date.now() + fiveDaysMs ||
+            (s.gracePeriodEndsAt && s.gracePeriodEndsAt.getTime() > Date.now() + fiveDaysMs);
+          if (tooLong) {
+            const maxStartEnd = new Date(s.currentPeriodStart.getTime() + fiveDaysMs);
+            const targetEnd =
+              maxStartEnd.getTime() >= Date.now()
+                ? maxStartEnd
+                : new Date(Date.now() + fiveDaysMs);
+            await prisma.subscription.update({
+              where: { id: s.id },
+              data: {
+                status: 'PAST_DUE',
+                currentPeriodEnd: targetEnd,
+                gracePeriodEndsAt: targetEnd,
+              },
+            });
+          }
+        }
+      }
+    } catch {}
+  }
 
   /**
    * Resumen global y métricas reales de la plataforma en Supabase PostgreSQL
    */
   async getMetrics(): Promise<any> {
+    await this.ensureClientRolesAndCleanTestRows();
     const [
       totalTenants,
       activeSubscriptions,
@@ -56,6 +130,7 @@ export class SuperAdminService {
    * Listado completo de empresas/tenants registrados con pagos recientes
    */
   async getAllTenants(): Promise<any> {
+    await this.ensureClientRolesAndCleanTestRows();
     const tenants = await prisma.tenant.findMany({
       include: {
         users: {
@@ -90,13 +165,21 @@ export class SuperAdminService {
     });
 
     return tenants.map((t) => {
-      const endDateRaw = t.subscription?.currentPeriodEnd;
-      const daysRemaining = endDateRaw
+      const hasPaid = (t.subscription?.payments || []).some((p) => p.status === 'PAID');
+      const endDateRaw =
+        t.subscription?.status === 'PAST_DUE' || !hasPaid
+          ? t.subscription?.gracePeriodEndsAt || t.subscription?.currentPeriodEnd
+          : t.subscription?.currentPeriodEnd;
+      let daysRemaining = endDateRaw
         ? Math.max(0, Math.ceil((new Date(endDateRaw).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
         : null;
+      if (daysRemaining !== null && (t.subscription?.status === 'PAST_DUE' || !hasPaid)) {
+        daysRemaining = Math.min(5, daysRemaining);
+      }
 
       return {
         ...t,
+        clientCode: `CLI-${t.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
         daysRemaining,
         subscription: t.subscription
           ? {
@@ -116,6 +199,48 @@ export class SuperAdminService {
           : null,
       };
     });
+  }
+
+  /**
+   * Asignar o revocar rol de ADMIN / BILLER (Cliente) a un usuario desde SuperAdmin
+   */
+  async updateUserRole(
+    userId: string,
+    role: 'ADMIN' | 'BILLER' | 'SUPERADMIN' | 'ACCOUNTANT',
+    adminUserId?: string
+  ): Promise<any> {
+    const existing = await prisma.tenantUser.findUnique({ where: { id: userId } });
+    if (!existing) throw new NotFoundException('Usuario no encontrado.');
+    if (existing.email.toLowerCase() === 'rootfacturas@antek.com.do') {
+      throw new BadRequestException('No se puede degradar la cuenta maestra rootfacturas.');
+    }
+
+    const allowedRoles = ['ADMIN', 'BILLER', 'SUPERADMIN', 'ACCOUNTANT'] as const;
+    const nextRole = allowedRoles.includes(role as any) ? role : 'BILLER';
+
+    const updated = await prisma.tenantUser.update({
+      where: { id: userId },
+      data: { role: nextRole },
+      select: { id: true, email: true, fullName: true, role: true, tenantId: true },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId: existing.tenantId,
+        userId: adminUserId || 'SUPERADMIN',
+        action: 'USER_ROLE_UPDATED_BY_SUPERADMIN',
+        entity: 'TenantUser',
+        entityId: userId,
+        oldPayload: { role: existing.role },
+        newPayload: { role: nextRole },
+      },
+    });
+
+    return {
+      success: true,
+      message: `Rol de ${updated.fullName} actualizado a ${nextRole === 'BILLER' ? 'CLIENTE' : nextRole}.`,
+      user: updated,
+    };
   }
 
   /**

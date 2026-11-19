@@ -8,11 +8,45 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function decodeJwtClientPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
+    let expectedTenantId: string | null = null;
+    let expectedUserId: string | null = null;
+    const rawUser = localStorage.getItem('antek_user');
+    if (rawUser) {
+      try {
+        const parsedUser = JSON.parse(rawUser);
+        expectedTenantId = parsedUser?.tenantId || null;
+        expectedUserId = parsedUser?.id || null;
+      } catch {}
+    }
+
     const stored = localStorage.getItem('antek_token');
-    if (stored) return stored;
+    if (stored) {
+      const jwt = decodeJwtClientPayload(stored);
+      const mismatch =
+        jwt &&
+        ((expectedTenantId && jwt.tenantId && jwt.tenantId !== expectedTenantId) ||
+          (expectedUserId && jwt.sub && jwt.sub !== expectedUserId));
+      if (!mismatch) {
+        return stored;
+      }
+      localStorage.removeItem('antek_token');
+      localStorage.removeItem('antek_tenant_cache');
+    }
 
     const cookieToken = readCookie('antek_client_token') || readCookie('access_token');
     if (cookieToken) {
@@ -201,4 +235,18 @@ export function formatDOP(val?: number | null): string {
     currency: 'DOP',
     minimumFractionDigits: 2,
   }).format(val);
+}
+
+export function formatRoleLabel(role?: string | null): string {
+  const upper = String(role || 'BILLER').toUpperCase();
+  if (upper === 'SUPERADMIN') return 'SUPER-ADMIN';
+  if (upper === 'ADMIN') return 'ADMIN';
+  if (upper === 'ACCOUNTANT') return 'CONTADOR';
+  return 'CLIENTE';
+}
+
+export function formatClientCode(id?: string | null): string {
+  if (!id) return 'CLI-PENDIENTE';
+  const clean = String(id).replace(/[^a-zA-Z0-9]/g, '');
+  return `CLI-${clean.slice(0, 8).toUpperCase()}`;
 }

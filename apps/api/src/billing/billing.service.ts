@@ -486,13 +486,15 @@ export class BillingService {
             (await prisma.plan.findFirst());
           if (defaultPlan) {
             const now = new Date();
+            const fiveDaysEnd = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
             dbSub = await prisma.subscription.create({
               data: {
                 tenantId,
                 planId: defaultPlan.id,
-                status: 'ACTIVE',
+                status: 'PAST_DUE',
                 currentPeriodStart: now,
-                currentPeriodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+                currentPeriodEnd: fiveDaysEnd,
+                gracePeriodEndsAt: fiveDaysEnd,
                 invoicesUsedCurrentPeriod: 0,
               },
               include: { plan: true },
@@ -502,10 +504,54 @@ export class BillingService {
       }
 
       if (dbSub && dbSub.plan) {
+        const hasPaid =
+          (await prisma.subscriptionPayment.count({
+            where: { subscriptionId: dbSub.id, status: 'PAID' },
+          })) > 0;
+
+        const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+        const maxTrialEnd = new Date(dbSub.currentPeriodStart.getTime() + fiveDaysMs);
+
+        // Corregir suscripciones en prueba/gracia cuyo plazo exceda los 5 días
+        if (!hasPaid && dbSub.status !== 'SUSPENDED') {
+          const needsEndFix =
+            dbSub.currentPeriodEnd.getTime() > Date.now() + fiveDaysMs ||
+            !dbSub.gracePeriodEndsAt ||
+            dbSub.gracePeriodEndsAt.getTime() > Date.now() + fiveDaysMs;
+          if (needsEndFix) {
+            const targetEnd =
+              maxTrialEnd.getTime() >= Date.now()
+                ? maxTrialEnd
+                : new Date(Date.now() + fiveDaysMs);
+            dbSub = await prisma.subscription.update({
+              where: { id: dbSub.id },
+              data: {
+                status: 'PAST_DUE',
+                currentPeriodEnd: targetEnd,
+                gracePeriodEndsAt: targetEnd,
+              },
+              include: { plan: true },
+            });
+          }
+        } else if (dbSub.status === 'PAST_DUE') {
+          const graceTarget =
+            dbSub.gracePeriodEndsAt && dbSub.gracePeriodEndsAt.getTime() <= Date.now() + fiveDaysMs
+              ? dbSub.gracePeriodEndsAt
+              : new Date(Date.now() + fiveDaysMs);
+          if (!dbSub.gracePeriodEndsAt || dbSub.gracePeriodEndsAt.getTime() !== graceTarget.getTime()) {
+            dbSub = await prisma.subscription.update({
+              where: { id: dbSub.id },
+              data: { gracePeriodEndsAt: graceTarget, currentPeriodEnd: graceTarget },
+              include: { plan: true },
+            });
+          }
+        }
+
         let graceDaysRemaining: number | undefined;
-        if (dbSub.status === 'PAST_DUE' && dbSub.gracePeriodEndsAt) {
-          const msLeft = dbSub.gracePeriodEndsAt.getTime() - Date.now();
-          graceDaysRemaining = Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
+        const effectiveGraceEnd = dbSub.gracePeriodEndsAt || dbSub.currentPeriodEnd;
+        if ((dbSub.status === 'PAST_DUE' || !hasPaid) && effectiveGraceEnd) {
+          const msLeft = effectiveGraceEnd.getTime() - Date.now();
+          graceDaysRemaining = Math.min(5, Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000))));
         }
 
         const pendingRaw = await prisma.subscriptionPayment.findFirst({

@@ -59,6 +59,7 @@ export async function middleware(request: NextRequest) {
     const payload = sigOk ? decodeJwtPayload(token) : null;
     const isSuperAdmin =
       payload?.role === 'SUPERADMIN' ||
+      payload?.role === 'ADMIN' ||
       String(payload?.email || '').toLowerCase() === 'rootfacturas@antek.com.do';
 
     if (!payload || !isSuperAdmin) {

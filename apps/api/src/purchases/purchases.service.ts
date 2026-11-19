@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import { prisma } from '@factura-ecf/database';
 import { RncService } from '../rnc/rnc.service';
 import * as crypto from 'crypto';
@@ -146,6 +146,7 @@ async function fetchDgiiTimbreHtml(qrUrl: string): Promise<DgiiHtmlFields | null
 @Injectable()
 export class PurchasesService {
   private inMemoryPurchases: any[] = [];
+  private testRowsCleaned = false;
 
   constructor(private readonly rncService: RncService) {}
 
@@ -642,6 +643,21 @@ export class PurchasesService {
       status?: string;
     }
   ): Promise<any> {
+    if (!tenantId || typeof tenantId !== 'string') {
+      throw new UnauthorizedException('TenantId requerido para consultar compras.');
+    }
+
+    if (!this.testRowsCleaned) {
+      this.testRowsCleaned = true;
+      try {
+        await prisma.receivedPurchase.deleteMany({
+          where: {
+            encf: { in: ['E310013736109', 'E310008728229', 'E310003998900'] },
+          },
+        });
+      } catch {}
+    }
+
     let purchases: any[] = [];
     try {
       const where: any = { tenantId };
@@ -746,7 +762,7 @@ export class PurchasesService {
       });
       return { success: true, message: 'Estado comercial actualizado.', purchase: updated };
     } catch {
-      const idx = this.inMemoryPurchases.findIndex((p) => p.id === purchaseId);
+      const idx = this.inMemoryPurchases.findIndex((p) => p.id === purchaseId && p.tenantId === tenantId);
       if (idx >= 0) {
         this.inMemoryPurchases[idx].commercialStatus = status;
         this.inMemoryPurchases[idx].commercialComment = comment;
@@ -755,6 +771,29 @@ export class PurchasesService {
       }
       throw new NotFoundException('Comprobante no encontrado.');
     }
+  }
+
+  /**
+   * Elimina una factura de compra del Libro 606 verificando pertenencia al tenant
+   */
+  public async deletePurchase(tenantId: string, purchaseId: string): Promise<any> {
+    if (!tenantId) {
+      throw new UnauthorizedException('TenantId requerido.');
+    }
+    const existing = await prisma.receivedPurchase.findFirst({
+      where: { id: purchaseId, tenantId },
+      select: { id: true, encf: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Comprobante no encontrado o no pertenece a tu empresa.');
+    }
+    await prisma.receivedPurchase.delete({
+      where: { id: existing.id },
+    });
+    return {
+      success: true,
+      message: `Comprobante ${existing.encf} eliminado de tu Libro Contable (606).`,
+    };
   }
 
   /**

@@ -24,7 +24,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { AntekLogo } from '../../components/AntekLogo';
-import { apiFetch, formatDOP } from '../../lib/api';
+import { apiFetch, formatDOP, formatRoleLabel, formatClientCode } from '../../lib/api';
 
 interface PlanConfig {
   id: string;
@@ -263,6 +263,38 @@ export default function SuperAdminPage() {
         return { ...p, priceDop: discountedDop, priceUsd: discountedUsd };
       })
     );
+  };
+
+  const handleToggleUserRole = async (userObj: any) => {
+    if (!userObj?.id) return;
+    const isAdminNow = String(userObj.role || '').toUpperCase() === 'ADMIN';
+    const nextRole = isAdminNow ? 'BILLER' : 'ADMIN';
+    try {
+      setActionLoading(true);
+      setErrorMsg(null);
+      const res = await apiFetch<any>(`/v1/superadmin/users/${userObj.id}/role`, {
+        method: 'PUT',
+        body: JSON.stringify({ role: nextRole }),
+      });
+      if (detailModalTenant && Array.isArray(detailModalTenant.users)) {
+        setDetailModalTenant((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                users: prev.users.map((u: any) =>
+                  u.id === userObj.id ? { ...u, role: nextRole } : u
+                ),
+              }
+            : null
+        );
+      }
+      showToast(res?.message || `Rol actualizado a ${formatRoleLabel(nextRole)} ✓`);
+      await loadData();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'No se pudo cambiar el rol del usuario.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleSendInvoiceLink = async (e: React.FormEvent) => {
@@ -676,7 +708,12 @@ export default function SuperAdminPage() {
                       return (
                         <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-4 px-4">
-                            <div className="font-bold text-white leading-tight">{t.razonSocial}</div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-white leading-tight">{t.razonSocial}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-500/30 text-[10px] font-mono font-bold text-sky-300">
+                                {t.clientCode || formatClientCode(t.id)}
+                              </span>
+                            </div>
                             <div className="text-[11px] text-slate-400 font-mono mt-0.5">
                               RNC: {t.rnc} ·{' '}
                               <a href={`mailto:${t.correo}`} className="text-sky-400 hover:underline">
@@ -701,17 +738,43 @@ export default function SuperAdminPage() {
                               </div>
                             )}
                             {usersList.length > 0 && (
-                              <div className="mt-1.5 space-y-0.5">
-                                {usersList.slice(0, 3).map((u: any) => (
-                                  <div key={u.id} className="text-[10px] text-slate-400 flex items-center gap-1.5">
-                                    <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-semibold">
-                                      {u.role}
-                                    </span>
-                                    <span className="truncate max-w-[180px]" title={u.email}>
-                                      {u.fullName} ({u.email})
-                                    </span>
-                                  </div>
-                                ))}
+                              <div className="mt-1.5 space-y-1">
+                                {usersList.slice(0, 3).map((u: any) => {
+                                  const isRoot = String(u.email || '').toLowerCase() === 'rootfacturas@antek.com.do';
+                                  const isAdminRole = String(u.role || '').toUpperCase() === 'ADMIN';
+                                  return (
+                                    <div key={u.id} className="text-[10px] text-slate-400 flex flex-wrap items-center gap-1.5">
+                                      <span
+                                        className={`px-1.5 py-0.5 rounded font-bold ${
+                                          u.role === 'SUPERADMIN'
+                                            ? 'bg-amber-500/20 text-amber-300'
+                                            : isAdminRole
+                                            ? 'bg-sky-500/20 text-sky-300'
+                                            : 'bg-slate-800 text-slate-300'
+                                        }`}
+                                      >
+                                        {formatRoleLabel(u.role)}
+                                      </span>
+                                      <span className="truncate max-w-[165px]" title={u.email}>
+                                        {u.fullName} ({u.email})
+                                      </span>
+                                      {!isRoot && (
+                                        <button
+                                          type="button"
+                                          disabled={actionLoading}
+                                          onClick={() => handleToggleUserRole(u)}
+                                          className={`px-1.5 py-0.5 rounded text-[9px] font-bold border transition cursor-pointer disabled:opacity-50 ${
+                                            isAdminRole
+                                              ? 'bg-rose-500/15 border-rose-500/30 text-rose-300 hover:bg-rose-500/30'
+                                              : 'bg-sky-500/15 border-sky-500/30 text-sky-300 hover:bg-sky-500/30'
+                                          }`}
+                                        >
+                                          {isAdminRole ? 'Quitar Admin' : 'Hacer Admin'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </td>
@@ -1585,11 +1648,16 @@ export default function SuperAdminPage() {
           >
             <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
               <div>
-                <h3 className="font-black text-white text-lg">
-                  Ficha y Edición del Cliente
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-white text-lg">
+                    Ficha y Edición del Cliente
+                  </h3>
+                  <span className="px-2 py-0.5 rounded bg-sky-500/15 border border-sky-500/30 text-[11px] font-mono font-bold text-sky-300">
+                    {detailModalTenant.clientCode || formatClientCode(detailModalTenant.id)}
+                  </span>
+                </div>
                 <p className="text-slate-400 mt-0.5">
-                  Edita datos fiscales, contacto, plan, días restantes y consulta sus usuarios/pagos.
+                  Edita datos fiscales, contacto, plan, días restantes y administra roles de sus usuarios.
                 </p>
               </div>
               <button
@@ -1731,19 +1799,50 @@ export default function SuperAdminPage() {
               <div className="font-bold text-slate-300">
                 Usuarios de la Empresa ({detailModalTenant.users?.length || 0})
               </div>
-              <div className="max-h-32 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 divide-y divide-slate-800/70">
+              <div className="max-h-36 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 divide-y divide-slate-800/70">
                 {Array.isArray(detailModalTenant.users) && detailModalTenant.users.length > 0 ? (
-                  detailModalTenant.users.map((u: any) => (
-                    <div key={u.id} className="px-3 py-2 flex items-center justify-between gap-2">
-                      <div>
-                        <span className="font-bold text-white">{u.fullName}</span>
-                        <span className="text-slate-400 ml-2">{u.email}</span>
+                  detailModalTenant.users.map((u: any) => {
+                    const isRoot = String(u.email || '').toLowerCase() === 'rootfacturas@antek.com.do';
+                    const isAdminRole = String(u.role || '').toUpperCase() === 'ADMIN';
+                    return (
+                      <div key={u.id} className="px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="font-bold text-white">{u.fullName}</span>
+                          <span className="text-slate-400 ml-2">{u.email}</span>
+                          <span className="text-[10px] font-mono text-slate-500 ml-2">
+                            USR-{String(u.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                              u.role === 'SUPERADMIN'
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : isAdminRole
+                                ? 'bg-sky-500/20 text-sky-300'
+                                : 'bg-slate-800 text-slate-300'
+                            }`}
+                          >
+                            {formatRoleLabel(u.role)} · {u.isActive ? 'Activo' : 'Inactivo'}
+                          </span>
+                          {!isRoot && (
+                            <button
+                              type="button"
+                              disabled={actionLoading}
+                              onClick={() => handleToggleUserRole(u)}
+                              className={`px-2.5 py-1 rounded-lg font-bold text-[10px] border transition cursor-pointer disabled:opacity-50 ${
+                                isAdminRole
+                                  ? 'bg-rose-500/15 border-rose-500/40 text-rose-300 hover:bg-rose-500/30'
+                                  : 'bg-sky-500/15 border-sky-500/40 text-sky-300 hover:bg-sky-500/30'
+                              }`}
+                            >
+                              {isAdminRole ? 'Quitar Admin → Cliente' : 'Hacer Admin'}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span className="px-2 py-0.5 rounded bg-slate-800 text-sky-300 font-bold text-[10px]">
-                        {u.role} · {u.isActive ? 'Activo' : 'Inactivo'}
-                      </span>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="px-3 py-2 text-slate-500">Sin usuarios listados</div>
                 )}

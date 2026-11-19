@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../../../lib/api';
+import { useApp } from '../../../context/AppContext';
 import {
   Users,
   Search,
@@ -29,6 +30,8 @@ interface CustomerRecord {
 }
 
 export default function CustomersPage() {
+  const { tenant } = useApp();
+  const storageKey = tenant?.id ? `antek_customers_${tenant.id}` : 'antek_customers_anon';
   const [rncInput, setRncInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -52,17 +55,21 @@ export default function CustomersPage() {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('antek_customers');
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         setCustomers(JSON.parse(saved));
+      } else {
+        setCustomers([]);
       }
-    } catch {}
-  }, []);
+    } catch {
+      setCustomers([]);
+    }
+  }, [storageKey]);
 
   const saveCustomers = (newList: CustomerRecord[]) => {
     setCustomers(newList);
     try {
-      localStorage.setItem('antek_customers', JSON.stringify(newList));
+      localStorage.setItem(storageKey, JSON.stringify(newList));
     } catch {}
   };
 

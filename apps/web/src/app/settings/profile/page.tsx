@@ -18,7 +18,7 @@ import {
   Lock,
   Layers,
 } from 'lucide-react';
-import { apiFetch } from '../../../lib/api';
+import { apiFetch, formatRoleLabel, formatClientCode } from '../../../lib/api';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -34,6 +34,28 @@ export default function ProfilePage() {
       } catch {}
     }
 
+    apiFetch<any>('/v1/auth/me')
+      .then((me) => {
+        if (me?.id) {
+          const mergedUser = {
+            id: me.id,
+            userCode: me.userCode,
+            clientCode: me.clientCode || me.tenant?.clientCode,
+            email: me.email,
+            fullName: me.fullName,
+            role: me.role,
+            tenantId: me.tenant?.id,
+            tenantName: me.tenant?.razonSocial,
+            rnc: me.tenant?.rnc,
+          };
+          setUser((prev: any) => ({ ...(prev || {}), ...mergedUser }));
+          try {
+            localStorage.setItem('antek_user', JSON.stringify(mergedUser));
+          } catch {}
+        }
+      })
+      .catch(() => {});
+
     apiFetch<any>('/v1/billing/subscription')
       .then((data) => {
         if (data) setSubscription(data);
@@ -48,6 +70,7 @@ export default function ProfilePage() {
     } catch {}
     localStorage.removeItem('antek_user');
     localStorage.removeItem('antek_token');
+    localStorage.removeItem('antek_tenant_cache');
     router.push('/login');
   };
 
@@ -92,12 +115,21 @@ export default function ProfilePage() {
               <p className="text-xs text-slate-400 truncate">{user?.email || '—'}</p>
               <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
                 <Shield className="w-3 h-3" />
-                Rol: {user?.role || 'ADMIN'}
+                Rol: {formatRoleLabel(user?.role)}
               </div>
             </div>
           </div>
 
           <div className="pt-4 border-t border-slate-800/80 space-y-3 text-xs">
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5 text-slate-500" />
+                ID de Cuenta:
+              </span>
+              <span className="font-mono font-bold text-white">
+                {user?.clientCode || formatClientCode(user?.tenantId)}
+              </span>
+            </div>
             <div className="flex items-center justify-between text-slate-300">
               <span className="text-slate-400 flex items-center gap-1.5">
                 <Building2 className="w-3.5 h-3.5 text-slate-500" />

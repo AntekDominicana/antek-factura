@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
 import { AppProvider, useApp } from '../../context/AppContext';
-import { apiFetch } from '../../lib/api';
+import { apiFetch, formatRoleLabel, formatClientCode } from '../../lib/api';
 import {
   User,
   LayoutDashboard,
@@ -35,7 +35,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [userName, setUserName] = useState('');
-  const [userRole, setUserRole] = useState('ADMIN');
+  const [userRole, setUserRole] = useState('BILLER');
   const [subState, setSubState] = useState<{
     status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED' | 'CANCELED';
     graceDaysRemaining?: number;
@@ -43,20 +43,46 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   } | null>(null);
 
   useEffect(() => {
+    const syncUser = (u: any) => {
+      if (!u) return;
+      const roleVal = String(u.role || 'BILLER').toUpperCase();
+      setUserName(u.fullName || u.email || '');
+      setUserRole(roleVal);
+      const emailLower = String(u.email || '').toLowerCase();
+      setIsSuperAdmin(
+        roleVal === 'SUPERADMIN' ||
+          roleVal === 'ADMIN' ||
+          emailLower === 'rootfacturas@antek.com.do' ||
+          emailLower === 'rootfacturas'
+      );
+    };
+
     try {
       const raw = localStorage.getItem('antek_user');
-      if (raw) {
-        const u = JSON.parse(raw);
-        setUserName(u.fullName || u.email || '');
-        setUserRole(u.role || 'ADMIN');
-        const emailLower = String(u.email || '').toLowerCase();
-        setIsSuperAdmin(
-          u.role === 'SUPERADMIN' ||
-            emailLower === 'rootfacturas@antek.com.do' ||
-            emailLower === 'rootfacturas'
-        );
-      }
+      if (raw) syncUser(JSON.parse(raw));
     } catch {}
+
+    apiFetch<any>('/v1/auth/me')
+      .then((me) => {
+        if (me?.id) {
+          const freshUser = {
+            id: me.id,
+            userCode: me.userCode,
+            clientCode: me.clientCode || me.tenant?.clientCode,
+            email: me.email,
+            fullName: me.fullName,
+            role: me.role,
+            tenantId: me.tenant?.id,
+            tenantName: me.tenant?.razonSocial,
+            rnc: me.tenant?.rnc,
+          };
+          syncUser(freshUser);
+          try {
+            localStorage.setItem('antek_user', JSON.stringify(freshUser));
+          } catch {}
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -160,6 +186,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
             </div>
             <div className="text-[10px] text-slate-400 font-mono truncate">
               RNC: {tenant?.rnc || 'Pendiente'}
+            </div>
+            <div className="text-[10px] text-sky-400 font-mono truncate">
+              ID: {formatClientCode(tenant?.id)}
             </div>
           </div>
         </div>
@@ -295,7 +324,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
                   {userName || 'Usuario'}
                 </span>
                 <span className="block text-[9px] font-bold text-sky-700 uppercase">
-                  {isSuperAdmin ? 'SUPERADMIN' : userRole}
+                  {formatRoleLabel(userRole)}
                 </span>
               </span>
             </Link>
@@ -449,7 +478,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
                   <div className="font-black text-xs uppercase tracking-wider text-amber-100 flex items-center gap-2">
                     <span>Plazo de Gracia Activo</span>
                     <span className="px-2 py-0.5 rounded-full bg-white text-amber-950 font-black text-[10px]">
-                      {subState.graceDaysRemaining ?? 5} días restantes
+                      {Math.min(5, Math.max(0, subState.graceDaysRemaining ?? 5))} días restantes
                     </span>
                   </div>
                   <p className="text-xs text-white/95 leading-relaxed mt-0.5">

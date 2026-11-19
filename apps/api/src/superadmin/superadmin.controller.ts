@@ -60,6 +60,7 @@ export class SuperAdminController {
           liveUser &&
           liveUser.isActive &&
           (liveUser.role === 'SUPERADMIN' ||
+            liveUser.role === 'ADMIN' ||
             liveUser.email.toLowerCase() === 'rootfacturas@antek.com.do')
         ) {
           return liveUser.email;
@@ -176,6 +177,19 @@ export class SuperAdminController {
     await this.verifySuperAdmin(req, secret);
     const plans = await this.superAdminService.getPlans();
     return { plans };
+  }
+
+  @Put('users/:userId/role')
+  @ApiOperation({ summary: 'Asignar o quitar rol de Admin a un usuario (Admin Root)' })
+  @ApiHeader({ name: 'X-SuperAdmin-Secret', required: false })
+  async updateUserRole(
+    @Param('userId') userId: string,
+    @Body() body: { role: 'ADMIN' | 'BILLER' | 'SUPERADMIN' | 'ACCOUNTANT' },
+    @Req() req: any,
+    @Headers('X-SuperAdmin-Secret') secret?: string
+  ): Promise<any> {
+    const adminId = await this.verifySuperAdmin(req, secret);
+    return this.superAdminService.updateUserRole(userId, body.role, adminId);
   }
 
   @Put('plans/:code')

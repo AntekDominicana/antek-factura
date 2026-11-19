@@ -2,11 +2,13 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   Query,
   Req,
   BadRequestException,
+  UnauthorizedException,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -29,7 +31,11 @@ export class PurchasesController {
   constructor(private readonly purchasesService: PurchasesService) {}
 
   private getEffectiveTenantId(req: any): string {
-    return req.user?.tenantId || req.tenantId;
+    const tid = req.user?.tenantId || req.tenantId;
+    if (!tid || typeof tid !== 'string') {
+      throw new UnauthorizedException('Sesión de empresa no válida.');
+    }
+    return tid;
   }
 
   @Post('parse-qr')
@@ -97,6 +103,13 @@ export class PurchasesController {
   ): Promise<any> {
     const tenantId = this.getEffectiveTenantId(req);
     return this.purchasesService.setCommercialApproval(tenantId, id, body.status, body.comment);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Elimina una factura de compra del Libro 606 de la empresa autenticada' })
+  async deletePurchase(@Param('id') id: string, @Req() req: any): Promise<any> {
+    const tenantId = this.getEffectiveTenantId(req);
+    return this.purchasesService.deletePurchase(tenantId, id);
   }
 
   @Get('export/606')

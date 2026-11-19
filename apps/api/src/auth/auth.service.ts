@@ -135,7 +135,7 @@ export class AuthService {
             email: cleanEmail,
             fullName: dto.fullName.trim(),
             passwordHash,
-            role: UserRole.ADMIN,
+            role: UserRole.BILLER,
             isActive: true,
             emailVerified: true,
           },
@@ -143,10 +143,10 @@ export class AuthService {
         subscription: {
           create: {
             planId: plan.id,
-            status: 'ACTIVE',
+            status: 'PAST_DUE',
             currentPeriodStart: new Date(),
-            currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            gracePeriodEndsAt: new Date(Date.now() + 35 * 24 * 60 * 60 * 1000),
+            currentPeriodEnd: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+            gracePeriodEndsAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
             invoicesUsedCurrentPeriod: 0,
           },
         },
@@ -224,7 +224,7 @@ export class AuthService {
 
     return {
       success: true,
-      message: 'Empresa y usuario administrador registrados exitosamente.',
+      message: 'Empresa y usuario cliente registrados exitosamente (prueba de 5 días activa).',
       tenantId: tenant.id,
       userId: user.id,
       email: user.email,
@@ -232,6 +232,8 @@ export class AuthService {
       refreshToken: rawRefreshToken,
       user: {
         id: user.id,
+        userCode: `USR-${user.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
+        clientCode: `CLI-${tenant.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
         email: user.email,
         fullName: user.fullName,
         role: user.role,
@@ -241,7 +243,7 @@ export class AuthService {
         direccion: tenant.direccion,
         nombreComercial: tenant.nombreComercial,
         plan: plan.name,
-        subscriptionStatus: 'ACTIVE',
+        subscriptionStatus: 'PAST_DUE',
       },
     };
   }
@@ -366,6 +368,8 @@ export class AuthService {
       refreshToken: rawRefreshToken,
       user: {
         id: user.id,
+        userCode: `USR-${user.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
+        clientCode: `CLI-${user.tenantId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
         email: user.email,
         fullName: user.fullName,
         role: effectiveRole,
@@ -569,15 +573,21 @@ export class AuthService {
       throw new NotFoundException('Usuario no encontrado.');
     }
 
+    const isRootEmail = user.email.toLowerCase() === 'rootfacturas@antek.com.do';
+    const effectiveRole = isRootEmail ? 'SUPERADMIN' : user.role;
+
     return {
       id: user.id,
+      userCode: `USR-${user.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
+      clientCode: `CLI-${user.tenant.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
       email: user.email,
       fullName: user.fullName,
-      role: user.role,
+      role: effectiveRole,
       isActive: user.isActive,
       twoFactorEnabled: user.twoFactorEnabled,
       tenant: {
         id: user.tenant.id,
+        clientCode: `CLI-${user.tenant.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
         rnc: user.tenant.rnc,
         razonSocial: user.tenant.razonSocial,
         nombreComercial: user.tenant.nombreComercial,
