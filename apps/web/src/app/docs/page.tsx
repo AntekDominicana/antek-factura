@@ -31,8 +31,16 @@ export default function DocsPage() {
             Integración de ANTEK Factura
           </h1>
           <p className="text-sm sm:text-base text-slate-400 leading-relaxed">
-            Aprende cómo conectar tus sistemas POS para restaurantes, ERPs de inventario o agentes de Inteligencia Artificial (Claude, ChatGPT, Gemini) a la facturación electrónica oficial de República Dominicana.
+            Aprende cómo conectar tus sistemas POS para restaurantes, páginas web hechas a medida, Uber Eats, PedidosYa y ERPs a la facturación electrónica oficial de República Dominicana.
           </p>
+          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+            <Link
+              href="/docs/api"
+              className="px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 transition"
+            >
+              <Code2 className="w-4 h-4" /> Ver Referencia API Pública v1 & Webhooks Delivery
+            </Link>
+          </div>
         </div>
 
         {/* Sección llms-full.txt para IAs */}

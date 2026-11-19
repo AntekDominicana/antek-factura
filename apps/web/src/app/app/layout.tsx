@@ -135,7 +135,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
     { href: '/app/settings/company', label: 'Mi Empresa & Logo', icon: Building2 },
     { href: '/app/settings/team', label: 'Equipo & Cajeros', icon: Users2 },
     { href: '/app/settings/security', label: 'Seguridad & 2FA', icon: ShieldCheck },
-    { href: '/app/settings/developers', label: 'API & Copilot IA', icon: Code2 },
+    { href: '/app/settings/developers', label: 'Integraciones & API', icon: Code2 },
     { href: '/app/settings/billing', label: 'Planes & Link Pago', icon: CreditCard },
   ];
 

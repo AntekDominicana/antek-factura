@@ -68,19 +68,33 @@ export class SecurityShieldService {
    */
   public inspectRequest(req: Request): void {
     const ua = String(req.headers['user-agent'] || '').toLowerCase();
-    for (const botSig of this.blockedAiAndScraperAgents) {
-      if (ua.includes(botSig)) {
-        this.blockedRequestsCount += 1;
-        this.aiAgentsBlockedCount += 1;
-        this.lastBlockedReason = `Agente IA / Scraper bloqueado (${botSig})`;
-        throw new HttpException(
-          {
-            statusCode: 403,
-            error: 'BlindLlmAgentShield',
-            message: 'BlindLlmAgentShield: Extracción automatizada por agentes IA o scrapers bloqueada.',
-          },
-          HttpStatus.FORBIDDEN
-        );
+    const path = String((req as any).originalUrl || req.url || '').toLowerCase();
+    const authHeader = String(req.headers['authorization'] || '');
+    const isIntegrationTraffic =
+      path.startsWith('/api/v1') ||
+      path.startsWith('/api/webhooks') ||
+      path.startsWith('/v1/public') ||
+      path.startsWith('/v1/integrations') ||
+      path.startsWith('/v1/webhooks') ||
+      authHeader.startsWith('Bearer ak_') ||
+      Boolean(req.headers['x-uber-signature']) ||
+      Boolean(req.headers['x-pedidosya-signature']);
+
+    if (!isIntegrationTraffic) {
+      for (const botSig of this.blockedAiAndScraperAgents) {
+        if (ua.includes(botSig)) {
+          this.blockedRequestsCount += 1;
+          this.aiAgentsBlockedCount += 1;
+          this.lastBlockedReason = `Agente IA / Scraper bloqueado (${botSig})`;
+          throw new HttpException(
+            {
+              statusCode: 403,
+              error: 'BlindLlmAgentShield',
+              message: 'BlindLlmAgentShield: Extracción automatizada por agentes IA o scrapers bloqueada.',
+            },
+            HttpStatus.FORBIDDEN
+          );
+        }
       }
     }
 

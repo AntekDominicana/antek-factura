@@ -57,7 +57,12 @@ async function bootstrap() {
   // Ocultar cabecera X-Powered-By de Express y habilitar límites seguros de payload
   app.disable('x-powered-by');
   app.useBodyParser('text', { type: ['application/xml', 'text/xml'], limit: '20mb' });
-  app.useBodyParser('json', { limit: '35mb' });
+  app.useBodyParser('json', {
+    limit: '35mb',
+    verify: (req: any, _res: any, buf: Buffer) => {
+      req.rawBody = buf;
+    },
+  });
 
   // Forzar HTTPS en producción y cabeceras de Hardening
   app.use((req: any, res: any, next: any) => {
@@ -126,6 +131,7 @@ async function bootstrap() {
       'Plataforma SaaS Multi-tenant de Facturación Electrónica (e-CF) República Dominicana - Cumplimiento DGII Ley 32-23, XMLDSig Directo, Auto-Reportes y Blindaje Anti-Ingeniería Inversa'
     )
     .setVersion('1.0')
+    .addBearerAuth()
     .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, 'X-API-Key')
     .build();
 

@@ -1,73 +1,317 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
-  Code2,
   Key,
   ShieldCheck,
   Copy,
   Check,
   RefreshCw,
-  Sparkles,
   Webhook,
-  Lock,
-  Eye,
-  EyeOff,
   AlertTriangle,
+  Plus,
+  Trash2,
+  Store,
+  Activity,
+  ExternalLink,
+  PlugZap,
 } from 'lucide-react';
+import { apiFetch } from '../../../../lib/api';
+
+interface CompanyApiKey {
+  id: string;
+  nombre: string;
+  prefijo_visible: string;
+  scopes: string[];
+  revocada: boolean;
+  ultimo_uso: string | null;
+  creada_en: string;
+}
+
+interface DeliveryConnectionItem {
+  id: string;
+  plataforma: 'ubereats' | 'pedidosya';
+  store_id: string;
+  activo: boolean;
+  emitir_en_estado: string;
+  incluir_envio: boolean;
+  incluir_propina: boolean;
+  creada_en: string;
+}
+
+interface ExternalSaleItem {
+  id: string;
+  origen: string;
+  external_id: string;
+  ecf_id: string | null;
+  encf: string | null;
+  estado: string;
+  error_detalle: string | null;
+  creada_en: string;
+}
+
+interface OutgoingWebhookInfo {
+  id: string;
+  url: string;
+  events: string[];
+  secretPrefix: string;
+  isActive: boolean;
+  recentDeliveries: Array<{
+    id: string;
+    event: string;
+    status: string;
+    attempts: number;
+    responseCode: number | null;
+    createdAt: string;
+  }>;
+}
 
 export default function DevelopersSettingsPage() {
-  const [copiedKey, setCopiedKey] = useState(false);
-  const [copiedSecret, setCopiedSecret] = useState(false);
-  const [showKey, setShowKey] = useState(false);
-
-  const [apiKey, setApiKey] = useState('antk_live_9f83a8b271d46c5e0988e41bf128a4c9e782');
-  const [webhookUrl, setWebhookUrl] = useState('https://mi-tienda.com.do/api/webhooks/antek-ecf');
-  const [webhookSecret] = useState('whsec_88f9104b2a3c5d6e7f80192a3b4c5d6e');
-  const [aiCopilotEnabled, setAiCopilotEnabled] = useState(true);
-  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const handleCopy = (text: string, type: 'key' | 'secret') => {
+  const [apiKeys, setApiKeys] = useState<CompanyApiKey[]>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [createdKeyOnce, setCreatedKeyOnce] = useState<{
+    nombre: string;
+    key: string;
+    prefijo_visible: string;
+  } | null>(null);
+  const [copiedKeyOnce, setCopiedKeyOnce] = useState(false);
+
+  const [deliveryConnections, setDeliveryConnections] = useState<DeliveryConnectionItem[]>([]);
+  const [plataforma, setPlataforma] = useState<'ubereats' | 'pedidosya'>('ubereats');
+  const [storeId, setStoreId] = useState('');
+  const [emitirEnEstado, setEmitirEnEstado] = useState('DELIVERED');
+  const [incluirEnvio, setIncluirEnvio] = useState(true);
+  const [incluirPropina, setIncluirPropina] = useState(true);
+  const [savingDelivery, setSavingDelivery] = useState(false);
+
+  const [outgoingWebhook, setOutgoingWebhook] = useState<OutgoingWebhookInfo | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [createdWebhookSecretOnce, setCreatedWebhookSecretOnce] = useState<string | null>(null);
+  const [copiedWebhookSecret, setCopiedWebhookSecret] = useState(false);
+
+  const [externalSales, setExternalSales] = useState<ExternalSaleItem[]>([]);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  const extractErr = (err: any, fallback: string) =>
+    err?.payload?.error || err?.message || fallback;
+
+  const loadSummary = async () => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const data = await apiFetch<any>('/v1/integrations/summary');
+      setApiKeys(Array.isArray(data?.apiKeys) ? data.apiKeys : []);
+      setDeliveryConnections(
+        Array.isArray(data?.deliveryConnections) ? data.deliveryConnections : []
+      );
+      setExternalSales(Array.isArray(data?.externalSales) ? data.externalSales : []);
+      setOutgoingWebhook(data?.outgoingWebhook || null);
+      if (data?.outgoingWebhook?.url) {
+        setWebhookUrl(data.outgoingWebhook.url);
+      }
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'No se pudo cargar el módulo de integraciones.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSummary();
+  }, []);
+
+  const flashSuccess = (msg: string) => {
+    setSuccessMsg(msg);
+    setTimeout(() => setSuccessMsg(null), 4500);
+  };
+
+  const handleCopyText = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
-    if (type === 'key') {
-      setCopiedKey(true);
-      setTimeout(() => setCopiedKey(false), 2000);
+    if (id === 'once') {
+      setCopiedKeyOnce(true);
+      setTimeout(() => setCopiedKeyOnce(false), 2000);
+    } else if (id === 'whsec') {
+      setCopiedWebhookSecret(true);
+      setTimeout(() => setCopiedWebhookSecret(false), 2000);
     } else {
-      setCopiedSecret(true);
-      setTimeout(() => setCopiedSecret(false), 2000);
+      setCopiedUrl(id);
+      setTimeout(() => setCopiedUrl(null), 2000);
     }
   };
 
-  const handleRotateKey = () => {
-    if (confirm('¿Deseas generar una nueva API Key? La clave actual dejará de funcionar de inmediato.')) {
-      const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(20)))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      setApiKey(`antk_live_${randomHex}`);
-      setSuccessMsg('Nueva API Key generada con éxito con cifrado CSPRNG ✓');
-      setTimeout(() => setSuccessMsg(null), 3500);
-    }
-  };
-
-  const handleSaveWebhook = (e: React.FormEvent) => {
+  const handleCreateApiKey = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setCreatingKey(true);
+    setErrorMsg(null);
+    try {
+      const created = await apiFetch<any>('/v1/integrations/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({
+          nombre: newKeyName.trim(),
+          scopes: ['invoices:write', 'invoices:read'],
+        }),
+      });
+      setCreatedKeyOnce({
+        nombre: created.nombre,
+        key: created.key,
+        prefijo_visible: created.prefijo_visible,
+      });
+      setNewKeyName('');
+      flashSuccess(`API Key "${created.nombre}" creada. Cópiala ahora; no volverá a mostrarse.`);
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'Error al generar la API Key.'));
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleRevokeKey = async (keyItem: CompanyApiKey) => {
+    if (
+      !confirm(
+        `¿Revocar la API Key "${keyItem.nombre}" (${keyItem.prefijo_visible}...)? El POS o sistema conectado dejará de emitir de inmediato.`
+      )
+    ) {
+      return;
+    }
+    setErrorMsg(null);
+    try {
+      await apiFetch(`/v1/integrations/api-keys/${keyItem.id}`, { method: 'DELETE' });
+      flashSuccess(`API Key "${keyItem.nombre}" revocada.`);
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'No se pudo revocar la API Key.'));
+    }
+  };
+
+  const handleSaveDelivery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!storeId.trim()) return;
+    setSavingDelivery(true);
+    setErrorMsg(null);
+    try {
+      await apiFetch('/v1/integrations/delivery', {
+        method: 'POST',
+        body: JSON.stringify({
+          plataforma,
+          store_id: storeId.trim(),
+          activo: true,
+          emitir_en_estado: emitirEnEstado,
+          incluir_envio: incluirEnvio,
+          incluir_propina: incluirPropina,
+        }),
+      });
+      setStoreId('');
+      flashSuccess(`Conexión ${plataforma === 'ubereats' ? 'Uber Eats' : 'PedidosYa'} guardada.`);
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'No se pudo guardar la conexión de delivery.'));
+    } finally {
+      setSavingDelivery(false);
+    }
+  };
+
+  const handleToggleDelivery = async (conn: DeliveryConnectionItem) => {
+    setErrorMsg(null);
+    try {
+      await apiFetch('/v1/integrations/delivery', {
+        method: 'POST',
+        body: JSON.stringify({
+          plataforma: conn.plataforma,
+          store_id: conn.store_id,
+          activo: !conn.activo,
+          emitir_en_estado: conn.emitir_en_estado,
+          incluir_envio: conn.incluir_envio,
+          incluir_propina: conn.incluir_propina,
+        }),
+      });
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Error actualizando el estado de la tienda.');
+    }
+  };
+
+  const handleDeleteDelivery = async (id: string) => {
+    if (!confirm('¿Eliminar esta conexión de delivery?')) return;
+    setErrorMsg(null);
+    try {
+      await apiFetch(`/v1/integrations/delivery/${id}`, { method: 'DELETE' });
+      flashSuccess('Conexión eliminada.');
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'No se pudo eliminar la conexión.');
+    }
+  };
+
+  const handleSaveWebhook = async (e: React.FormEvent, rotateSecret = false) => {
+    e.preventDefault();
+    if (!webhookUrl.trim()) return;
     setSavingWebhook(true);
-    setTimeout(() => {
+    setErrorMsg(null);
+    try {
+      const saved = await apiFetch<any>('/v1/integrations/outgoing-webhook', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: webhookUrl.trim(),
+          events: ['invoice.emitted', 'invoice.failed'],
+          rotateSecret,
+        }),
+      });
+      if (saved?.secretOnce) {
+        setCreatedWebhookSecretOnce(saved.secretOnce);
+      }
+      flashSuccess('Webhook saliente configurado con firma HMAC-SHA256.');
+      await loadSummary();
+    } catch (err: any) {
+      setErrorMsg(extractErr(err, 'No se pudo guardar el Webhook.'));
+    } finally {
       setSavingWebhook(false);
-      setSuccessMsg('Configuración de Webhook guardada exitosamente ✓');
-      setTimeout(() => setSuccessMsg(null), 3500);
-    }, 600);
+    }
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-black text-slate-900">Desarrolladores & API Cifrada</h1>
-        <p className="text-xs text-slate-500">
-          Credenciales API, Webhooks para tu ERP y Blind-LLM Shield anti ingeniería inversa
-        </p>
+    <div className="space-y-6 max-w-5xl mx-auto pb-12">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900">Integraciones &amp; API Pública v1</h1>
+          <p className="text-xs text-slate-500">
+            Conecta tu sistema POS, página web hecha en código, Uber Eats y PedidosYa hacia ANTEK Factura
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/docs/api"
+            target="_blank"
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold inline-flex items-center gap-1.5 transition"
+          >
+            <span>Documentación API &amp; curl</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </Link>
+          <button
+            type="button"
+            onClick={loadSummary}
+            className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5 transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span>Actualizar</span>
+          </button>
+        </div>
       </div>
+
+      {errorMsg && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {successMsg && (
         <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
@@ -76,166 +320,414 @@ export default function DevelopersSettingsPage() {
         </div>
       )}
 
-      {/* Blind-LLM Shield Banner */}
-      <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-sky-950 border border-sky-800/40 text-white shadow-xl relative overflow-hidden">
-        <div className="absolute right-0 top-0 translate-x-4 -translate-y-4 w-40 h-40 bg-sky-500/10 rounded-full blur-2xl pointer-events-none" />
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-black tracking-wider uppercase text-sky-400">
-                Blind-LLM Shield • Activo & Protegido
-              </span>
-            </div>
-            <p className="text-xs text-slate-300 max-w-xl leading-relaxed">
-              Tu código, lógica de facturación y datos fiscales están blindados criptográficamente contra agentes de IA no autorizados, scrapers e ingeniería inversa.
-            </p>
-          </div>
-          <div className="px-3 py-1.5 rounded-xl bg-sky-500/10 border border-sky-400/30 text-sky-300 font-mono text-[11px] font-bold self-start sm:self-auto shrink-0">
-            Firma: ANTEK Core v2.4
-          </div>
-        </div>
-      </div>
-
-      {/* API Key */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
+      {/* 1. API KEYS POR EMPRESA */}
+      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Key className="w-4 h-4 text-sky-600" />
-            <h2 className="text-sm font-bold text-slate-900">API Key de Producción</h2>
+            <h2 className="text-sm font-bold text-slate-900">1. API Keys para POS &amp; Sitios Web</h2>
           </div>
+          <span className="text-[11px] text-slate-500 font-mono">
+            Header: Authorization: Bearer ak_live_... (60 req/min)
+          </span>
+        </div>
+
+        <form onSubmit={handleCreateApiKey} className="flex flex-col sm:flex-row gap-2.5">
+          <input
+            type="text"
+            required
+            placeholder='Nombre de la integración (ej. "POS Restaurante" o "Tienda Web")'
+            value={newKeyName}
+            onChange={(e) => setNewKeyName(e.target.value)}
+            className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-hidden focus:border-sky-500"
+          />
           <button
-            type="button"
-            onClick={handleRotateKey}
-            className="text-xs font-bold text-slate-600 hover:text-sky-600 flex items-center gap-1 transition"
+            type="submit"
+            disabled={creatingKey || !newKeyName.trim()}
+            className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 transition shrink-0"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Rotar Clave</span>
+            <Plus className="w-4 h-4" />
+            <span>{creatingKey ? 'Generando...' : 'Generar API Key'}</span>
           </button>
-        </div>
+        </form>
 
-        <p className="text-xs text-slate-500 leading-relaxed">
-          Usa esta clave en el encabezado <code className="bg-slate-100 px-1 py-0.5 rounded-sm font-mono text-slate-800">Authorization: Bearer antk_live_...</code> para emitir e-CF desde tu tienda online o sistema ERP.
-        </p>
-
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <input
-              type={showKey ? 'text' : 'password'}
-              readOnly
-              value={apiKey}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 font-mono text-xs text-slate-800 focus:outline-hidden pr-20"
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-            >
-              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => handleCopy(apiKey, 'key')}
-            className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs inline-flex items-center gap-1.5 transition shrink-0"
-          >
-            {copiedKey ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-            <span>{copiedKey ? 'Copiado' : 'Copiar'}</span>
-          </button>
-        </div>
-
-        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
-          <span>Nunca compartas tu API Key en repositorios públicos. Las peticiones son autenticadas contra tu tenant en modo Row Level Security (RLS).</span>
-        </div>
-      </div>
-
-      {/* Webhooks */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
-        <div className="flex items-center gap-2">
-          <Webhook className="w-4 h-4 text-sky-600" />
-          <h2 className="text-sm font-bold text-slate-900">Webhooks en Tiempo Real</h2>
-        </div>
-        <p className="text-xs text-slate-500">
-          Recibe notificaciones instantáneas de eventos emitidos por la DGII (<code className="font-mono text-slate-700">invoice.accepted_dgii</code>, <code className="font-mono text-slate-700">invoice.rejected_dgii</code>).
-        </p>
-
-        <form onSubmit={handleSaveWebhook} className="space-y-3">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">URL de Destino</label>
-            <input
-              type="url"
-              required
-              value={webhookUrl}
-              onChange={(e) => setWebhookUrl(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-xs text-slate-800 focus:outline-hidden focus:border-sky-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Firma Secreta HMAC (Webhook Secret)</label>
+        {createdKeyOnce && (
+          <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 space-y-2.5">
+            <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                ¡Guarda tu clave ahora! Por seguridad solo almacenamos el hash SHA-256 y no volverá a mostrarse ({createdKeyOnce.nombre}).
+              </span>
+            </div>
             <div className="flex items-center gap-2">
-              <input
-                type="text"
-                readOnly
-                value={webhookSecret}
-                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 font-mono text-xs text-slate-600 focus:outline-hidden"
-              />
+              <code className="flex-1 px-3 py-2 rounded-lg bg-slate-950 text-emerald-400 font-mono text-xs break-all">
+                {createdKeyOnce.key}
+              </code>
               <button
                 type="button"
-                onClick={() => handleCopy(webhookSecret, 'secret')}
-                className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold inline-flex items-center gap-1 shrink-0"
+                onClick={() => handleCopyText(createdKeyOnce.key, 'once')}
+                className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0"
               >
-                {copiedSecret ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedSecret ? 'Copiado' : 'Copiar'}</span>
+                {copiedKeyOnce ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedKeyOnce ? 'Copiada' : 'Copiar'}</span>
               </button>
             </div>
           </div>
+        )}
 
-          <div className="pt-2">
-            <button
-              type="submit"
-              disabled={savingWebhook}
-              className="px-4 py-2 text-xs font-bold text-white bg-sky-600 hover:bg-sky-500 rounded-xl transition shadow-xs"
-            >
-              {savingWebhook ? 'Guardando...' : 'Guardar Webhook'}
-            </button>
-          </div>
-        </form>
+        <div className="overflow-x-auto border border-slate-200 rounded-xl">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                <th className="px-3.5 py-2.5">Nombre</th>
+                <th className="px-3.5 py-2.5">Prefijo</th>
+                <th className="px-3.5 py-2.5">Permisos</th>
+                <th className="px-3.5 py-2.5">Último uso</th>
+                <th className="px-3.5 py-2.5">Estado</th>
+                <th className="px-3.5 py-2.5 text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {apiKeys.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-3.5 py-6 text-center text-slate-400">
+                    No has creado API Keys todavía. Crea una para conectar tu POS o web.
+                  </td>
+                </tr>
+              ) : (
+                apiKeys.map((k) => (
+                  <tr key={k.id} className="hover:bg-slate-50/70">
+                    <td className="px-3.5 py-2.5 font-bold text-slate-800">{k.nombre}</td>
+                    <td className="px-3.5 py-2.5 font-mono text-slate-600">{k.prefijo_visible}••••</td>
+                    <td className="px-3.5 py-2.5">
+                      <span className="font-mono text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md">
+                        {k.scopes.join(', ')}
+                      </span>
+                    </td>
+                    <td className="px-3.5 py-2.5 text-slate-500">
+                      {k.ultimo_uso ? new Date(k.ultimo_uso).toLocaleString('es-DO') : 'Nunca usada'}
+                    </td>
+                    <td className="px-3.5 py-2.5">
+                      {k.revocada ? (
+                        <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 font-bold text-[11px]">
+                          Revocada
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[11px]">
+                          Activa
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3.5 py-2.5 text-right">
+                      {!k.revocada && (
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeKey(k)}
+                          className="text-red-600 hover:text-red-700 font-bold inline-flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Revocar</span>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Copilot Gemini con RLS */}
-      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-purple-600" />
-            <h2 className="text-sm font-bold text-slate-900">Copilot Gemini Asistente Fiscal (RLS Activo)</h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => setAiCopilotEnabled(!aiCopilotEnabled)}
-            className={`w-11 h-6 flex items-center rounded-full p-1 transition ${
-              aiCopilotEnabled ? 'bg-purple-600 justify-end' : 'bg-slate-300 justify-start'
-            }`}
-          >
-            <span className="w-4 h-4 rounded-full bg-white shadow-xs" />
-          </button>
+      {/* 2. CONECTORES DELIVERY: UBER EATS Y PEDIDOSYA */}
+      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-5">
+        <div className="flex items-center gap-2">
+          <Store className="w-4 h-4 text-sky-600" />
+          <h2 className="text-sm font-bold text-slate-900">
+            2. Conectores Automáticos Delivery (Uber Eats &amp; PedidosYa)
+          </h2>
         </div>
 
         <p className="text-xs text-slate-500 leading-relaxed">
-          Permite al usuario hacer preguntas en lenguaje natural sobre sus facturas, inventario y comprobantes e-CF.
-          <strong> Protegido por Row Level Security (RLS)</strong>: La IA nunca tiene acceso a datos de otras empresas ni a clientes externos.
+          Registra el <code className="bg-slate-100 px-1 py-0.5 rounded-sm font-mono">store_id</code> de tu sucursal en Uber Eats o PedidosYa para emitir e-CF 32 automáticamente sin que tu POS se conecte directo a ellos. Las comisiones de la plataforma nunca se facturan al cliente.
         </p>
 
-        <div className="p-4 rounded-xl bg-purple-50/70 border border-purple-200 text-purple-900 text-xs space-y-2">
-          <div className="font-bold flex items-center gap-1.5">
-            <Lock className="w-3.5 h-3.5 text-purple-700" />
-            <span>Garantía de Privacidad RLS Multi-Tenant</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {[
+            {
+              id: 'uber',
+              label: 'Webhook URL para Uber Eats',
+              url: 'https://factura.antek.com.do/api/webhooks/ubereats',
+            },
+            {
+              id: 'peya',
+              label: 'Webhook URL para PedidosYa',
+              url: 'https://factura.antek.com.do/api/webhooks/pedidosya',
+            },
+          ].map((item) => (
+            <div key={item.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+              <div className="text-[11px] font-bold text-slate-600">{item.label}</div>
+              <div className="flex items-center justify-between gap-2">
+                <code className="text-[11px] font-mono text-slate-800 truncate">{item.url}</code>
+                <button
+                  type="button"
+                  onClick={() => handleCopyText(item.url, item.id)}
+                  className="text-sky-600 hover:text-sky-700 text-[11px] font-bold inline-flex items-center gap-1 shrink-0"
+                >
+                  {copiedUrl === item.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedUrl === item.id ? 'Copiada' : 'Copiar'}</span>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={handleSaveDelivery} className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-1">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Plataforma</label>
+            <select
+              value={plataforma}
+              onChange={(e) => setPlataforma(e.target.value as 'ubereats' | 'pedidosya')}
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
+            >
+              <option value="ubereats">Uber Eats</option>
+              <option value="pedidosya">PedidosYa</option>
+            </select>
           </div>
-          <p className="text-[11px] text-purple-800 leading-relaxed">
-            Cada consulta enviada a Gemini inyecta como contexto únicamente los registros del tenant actual mediante filtros criptográficos en la base de datos PostgreSQL.
-          </p>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Store ID en Plataforma</label>
+            <input
+              type="text"
+              required
+              placeholder="ej. ue_store_12345"
+              value={storeId}
+              onChange={(e) => setStoreId(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono text-slate-800"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Estado disparador</label>
+            <select
+              value={emitirEnEstado}
+              onChange={(e) => setEmitirEnEstado(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 bg-white"
+            >
+              <option value="DELIVERED">DELIVERED (Entregado)</option>
+              <option value="CONFIRMED">CONFIRMED (Confirmado)</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="submit"
+              disabled={savingDelivery || !storeId.trim()}
+              className="w-full px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center justify-center gap-1.5 transition"
+            >
+              <PlugZap className="w-3.5 h-3.5" />
+              <span>{savingDelivery ? 'Guardando...' : 'Conectar Tienda'}</span>
+            </button>
+          </div>
+        </form>
+
+        <div className="flex flex-wrap gap-4 text-xs text-slate-700">
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={incluirEnvio}
+              onChange={(e) => setIncluirEnvio(e.target.checked)}
+              className="rounded-sm border-slate-300 text-sky-600"
+            />
+            <span>Facturar envío como línea separada</span>
+          </label>
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={incluirPropina}
+              onChange={(e) => setIncluirPropina(e.target.checked)}
+              className="rounded-sm border-slate-300 text-sky-600"
+            />
+            <span>Facturar propina como línea separada exenta</span>
+          </label>
+        </div>
+
+        {deliveryConnections.length > 0 && (
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                  <th className="px-3.5 py-2">Plataforma</th>
+                  <th className="px-3.5 py-2">Store ID</th>
+                  <th className="px-3.5 py-2">Opciones</th>
+                  <th className="px-3.5 py-2">Estado</th>
+                  <th className="px-3.5 py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {deliveryConnections.map((c) => (
+                  <tr key={c.id}>
+                    <td className="px-3.5 py-2 font-bold uppercase text-slate-800">{c.plataforma}</td>
+                    <td className="px-3.5 py-2 font-mono text-slate-700">{c.store_id}</td>
+                    <td className="px-3.5 py-2 text-slate-500">
+                      Estado: {c.emitir_en_estado} · Envío: {c.incluir_envio ? 'Sí' : 'No'} · Propina:{' '}
+                      {c.incluir_propina ? 'Sí' : 'No'}
+                    </td>
+                    <td className="px-3.5 py-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleDelivery(c)}
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                          c.activo
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {c.activo ? 'Activo' : 'Pausado'}
+                      </button>
+                    </td>
+                    <td className="px-3.5 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDelivery(c.id)}
+                        className="text-red-600 hover:text-red-700 font-bold"
+                      >
+                        Eliminar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 3. WEBHOOK SALIENTE */}
+      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
+        <div className="flex items-center gap-2">
+          <Webhook className="w-4 h-4 text-sky-600" />
+          <h2 className="text-sm font-bold text-slate-900">
+            3. Webhook Saliente (Notificaciones en Tiempo Real)
+          </h2>
+        </div>
+        <p className="text-xs text-slate-500">
+          Enviamos un <code className="font-mono text-slate-700">POST</code> firmado con HMAC-SHA256 en{' '}
+          <code className="font-mono text-slate-700">X-Antek-Signature</code> para los eventos{' '}
+          <code className="font-mono text-slate-700">invoice.emitted</code> e{' '}
+          <code className="font-mono text-slate-700">invoice.failed</code> (hasta 3 reintentos con backoff).
+        </p>
+
+        <form onSubmit={(e) => handleSaveWebhook(e, false)} className="space-y-3">
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <input
+              type="url"
+              required
+              placeholder="https://tu-sistema.com/webhooks/antek-factura"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-xs text-slate-800 focus:outline-hidden focus:border-sky-500"
+            />
+            <button
+              type="submit"
+              disabled={savingWebhook}
+              className="px-4 py-2.5 text-xs font-bold text-white bg-sky-600 hover:bg-sky-500 rounded-xl transition shrink-0"
+            >
+              {savingWebhook ? 'Guardando...' : 'Guardar URL'}
+            </button>
+            {outgoingWebhook && (
+              <button
+                type="button"
+                disabled={savingWebhook}
+                onClick={(e) => handleSaveWebhook(e, true)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-xl transition shrink-0"
+              >
+                Rotar Secret
+              </button>
+            )}
+          </div>
+        </form>
+
+        {createdWebhookSecretOnce && (
+          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-2">
+            <div className="text-xs font-bold text-amber-900">
+              Secret de firma HMAC-SHA256 (guárdalo para verificar X-Antek-Signature):
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 text-emerald-400 font-mono text-xs break-all">
+                {createdWebhookSecretOnce}
+              </code>
+              <button
+                type="button"
+                onClick={() => handleCopyText(createdWebhookSecretOnce, 'whsec')}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold inline-flex items-center gap-1"
+              >
+                {copiedWebhookSecret ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedWebhookSecret ? 'Copiado' : 'Copiar'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {outgoingWebhook && !createdWebhookSecretOnce && (
+          <div className="text-xs text-slate-600">
+            Secret activo: <code className="font-mono bg-slate-100 px-1.5 py-0.5 rounded-sm">{outgoingWebhook.secretPrefix}</code>
+          </div>
+        )}
+      </div>
+
+      {/* 4. TRAZABILIDAD DE VENTAS EXTERNAS */}
+      <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-4">
+        <div className="flex items-center gap-2">
+          <Activity className="w-4 h-4 text-sky-600" />
+          <h2 className="text-sm font-bold text-slate-900">
+            4. Bitácora de Ventas Externas (ventas_externas)
+          </h2>
+        </div>
+
+        <div className="overflow-x-auto border border-slate-200 rounded-xl">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                <th className="px-3.5 py-2.5">Origen</th>
+                <th className="px-3.5 py-2.5">External ID</th>
+                <th className="px-3.5 py-2.5">e-NCF</th>
+                <th className="px-3.5 py-2.5">Estado</th>
+                <th className="px-3.5 py-2.5">Detalle / Fecha</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {externalSales.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-3.5 py-6 text-center text-slate-400">
+                    Aún no se han recibido ventas por API Pública v1 ni conectores de delivery.
+                  </td>
+                </tr>
+              ) : (
+                externalSales.map((s) => (
+                  <tr key={s.id}>
+                    <td className="px-3.5 py-2.5 font-bold uppercase text-slate-700">{s.origen}</td>
+                    <td className="px-3.5 py-2.5 font-mono text-slate-800">{s.external_id}</td>
+                    <td className="px-3.5 py-2.5 font-mono font-bold text-sky-700">
+                      {s.encf || '—'}
+                    </td>
+                    <td className="px-3.5 py-2.5">
+                      <span
+                        className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
+                          s.estado === 'emitido'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : s.estado === 'error' || s.estado === 'alerta_nota_credito'
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {s.estado}
+                      </span>
+                    </td>
+                    <td className="px-3.5 py-2.5 text-slate-500">
+                      {s.error_detalle || new Date(s.creada_en).toLocaleString('es-DO')}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

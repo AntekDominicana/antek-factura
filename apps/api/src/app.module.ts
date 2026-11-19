@@ -16,6 +16,13 @@ import { NotificationsService } from './notifications/notifications.service';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { StorageModule } from './storage/storage.module';
+import { IntegrationsService } from './integrations/integrations.service';
+import { ApiKeyAuthGuard } from './integrations/api-key-auth.guard';
+import {
+  DeliveryWebhooksController,
+  PublicInvoicesV1Controller,
+  TenantIntegrationsController,
+} from './integrations/integrations.controller';
 
 @Module({
   imports: [
@@ -39,11 +46,20 @@ import { StorageModule } from './storage/storage.module';
     AuthModule,
     StorageModule,
   ],
-  controllers: [InvoicesController, DgiiReceptorController, HealthController],
+  controllers: [
+    InvoicesController,
+    DgiiReceptorController,
+    HealthController,
+    PublicInvoicesV1Controller,
+    DeliveryWebhooksController,
+    TenantIntegrationsController,
+  ],
   providers: [
     SecurityShieldService,
     FiscalService,
     NotificationsService,
+    IntegrationsService,
+    ApiKeyAuthGuard,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

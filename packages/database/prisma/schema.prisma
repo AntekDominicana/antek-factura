@@ -129,6 +129,8 @@ model Tenant {
   webhooks                Webhook[]
   paymentLinks            PaymentLinkTransaction[]
   receivedPurchases       ReceivedPurchase[]
+  externalSales           ExternalSale[]
+  deliveryConnections     DeliveryConnection[]
 
   @@index([rnc])
 }
@@ -478,11 +480,13 @@ model ApiKey {
   id                String            @id @default(uuid())
   tenantId          String
   name              String
-  keyPrefix         String            // primeros 8 caracteres (ej. 'ecf_live_')
+  keyPrefix         String            // primeros 12 caracteres (ej. 'ak_live_3f9a')
   keyHash           String            @unique // SHA-256 de la API Key completa
   encryptedKeyVault String?           // AES-256-GCM cifrado (nunca expuesto en respuestas)
+  scopes            String[]          @default(["invoices:write", "invoices:read"])
   environment       SystemEnvironment @default(SANDBOX)
   isActive          Boolean           @default(true)
+  revoked           Boolean           @default(false)
   lastUsedAt        DateTime?
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
@@ -619,4 +623,43 @@ model ReceivedPurchase {
 
   @@unique([tenantId, rncEmisor, encf])
   @@index([tenantId, commercialStatus])
+}
+
+model ExternalSale {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("empresa_id")
+  origen          String   // 'pos' | 'ubereats' | 'pedidosya'
+  externalId      String   @map("external_id")
+  payloadOriginal Json     @map("payload_original")
+  ecfId           String?  @map("ecf_id")
+  encf            String?
+  estado          String   @default("pendiente") // 'pendiente' | 'emitido' | 'error' | 'cancelado' | 'alerta_nota_credito'
+  errorDetalle    String?  @map("error_detalle")
+  createdAt       DateTime @default(now()) @map("creada_en")
+  updatedAt       DateTime @updatedAt @map("actualizada_en")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, origen, externalId], name: "empresa_origen_external_unique")
+  @@index([tenantId, createdAt])
+  @@map("ventas_externas")
+}
+
+model DeliveryConnection {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("empresa_id")
+  plataforma      String   // 'ubereats' | 'pedidosya'
+  storeId         String   @map("store_id")
+  activo          Boolean  @default(true)
+  emitirEnEstado  String   @default("DELIVERED") @map("emitir_en_estado")
+  incluirEnvio    Boolean  @default(true) @map("incluir_envio")
+  incluirPropina  Boolean  @default(true) @map("incluir_propina")
+  createdAt       DateTime @default(now()) @map("creada_en")
+  updatedAt       DateTime @updatedAt @map("actualizada_en")
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([plataforma, storeId], name: "plataforma_store_unique")
+  @@index([tenantId, plataforma])
+  @@map("conexiones_delivery")
 }

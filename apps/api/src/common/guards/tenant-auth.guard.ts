@@ -37,9 +37,16 @@ export class TenantAuthGuard implements CanActivate {
     let authContext: AuthenticatedUserContext | null = null;
 
     // Caso A: Token JWT en Authorization Bearer o Cookie HttpOnly
-    const token = authHeader?.startsWith('Bearer ')
+    const bearerToken = authHeader?.startsWith('Bearer ')
       ? authHeader.slice(7).trim()
-      : cookieToken;
+      : undefined;
+    const isBearerApiKey = Boolean(
+      bearerToken &&
+        (bearerToken.startsWith('ak_') ||
+          bearerToken.startsWith('ecf_') ||
+          bearerToken.startsWith('antk_'))
+    );
+    const token = isBearerApiKey ? undefined : bearerToken || cookieToken;
 
     if (token) {
       try {
@@ -102,24 +109,35 @@ export class TenantAuthGuard implements CanActivate {
       }
     }
 
-    // Caso B: X-API-Key (Integraciones B2B / ERP / POS)
-    if (!authContext && apiKeyHeader) {
-      const rawKey = String(apiKeyHeader).trim();
+    // Caso B: API Key en Authorization Bearer ak_live_... o X-API-Key (Integraciones B2B / ERP / POS)
+    const rawApiKeyCandidate =
+      (isBearerApiKey ? bearerToken : undefined) ||
+      (apiKeyHeader ? String(apiKeyHeader).trim() : undefined);
+
+    if (!authContext && rawApiKeyCandidate) {
+      const rawKey = rawApiKeyCandidate;
       const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
 
-      // Intentar obtener de caché Redis
+      // Intentar obtener de caché Redis (30s para reflejar revocaciones con rapidez)
       const cacheKey = `apikey:${keyHash.slice(0, 16)}`;
       const cachedTenant = await this.cacheService.get<{
+        id?: string;
         tenantId: string;
         environment: 'SANDBOX' | 'PRODUCTION';
+        revoked?: boolean;
       }>(cacheKey);
 
-      if (cachedTenant) {
+      if (cachedTenant && !cachedTenant.revoked) {
         authContext = {
           tenantId: cachedTenant.tenantId,
           environment: cachedTenant.environment,
           authType: 'API_KEY',
         };
+        if (cachedTenant.id) {
+          prisma.apiKey
+            .update({ where: { id: cachedTenant.id }, data: { lastUsedAt: new Date() } })
+            .catch(() => undefined);
+        }
       } else {
         // Consultar en PostgreSQL
         const apiKeyRecord = await prisma.apiKey.findUnique({
@@ -127,17 +145,25 @@ export class TenantAuthGuard implements CanActivate {
           include: { tenant: true },
         });
 
-        if (apiKeyRecord && apiKeyRecord.isActive && apiKeyRecord.tenant) {
+        if (apiKeyRecord && apiKeyRecord.isActive && !apiKeyRecord.revoked && apiKeyRecord.tenant) {
           authContext = {
             tenantId: apiKeyRecord.tenantId,
-            environment: apiKeyRecord.environment as 'SANDBOX' | 'PRODUCTION',
+            environment: (apiKeyRecord.tenant.environment || apiKeyRecord.environment) as 'SANDBOX' | 'PRODUCTION',
             authType: 'API_KEY',
           };
-          // Cachear por 5 minutos
-          await this.cacheService.set(cacheKey, {
-            tenantId: apiKeyRecord.tenantId,
-            environment: apiKeyRecord.environment,
-          }, 300);
+          prisma.apiKey
+            .update({ where: { id: apiKeyRecord.id }, data: { lastUsedAt: new Date() } })
+            .catch(() => undefined);
+          await this.cacheService.set(
+            cacheKey,
+            {
+              id: apiKeyRecord.id,
+              tenantId: apiKeyRecord.tenantId,
+              environment: authContext.environment,
+              revoked: false,
+            },
+            30
+          );
         }
       }
     }

@@ -11,6 +11,14 @@ const nextConfig = {
         source: '/v1/:path*',
         destination: `${apiTarget}/v1/:path*`,
       },
+      {
+        source: '/api/v1/:path*',
+        destination: `${apiTarget}/api/v1/:path*`,
+      },
+      {
+        source: '/api/webhooks/:path*',
+        destination: `${apiTarget}/api/webhooks/:path*`,
+      },
     ];
   },
   async headers() {
