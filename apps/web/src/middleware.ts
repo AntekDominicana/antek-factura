@@ -66,11 +66,6 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // 3. Si ya está autenticado y visita /login o /register, redirigir al Dashboard
-  if (isAuthPage && token) {
-    return NextResponse.redirect(new URL('/app/dashboard', request.url));
-  }
-
   // Cabeceras de seguridad estrictas
   const response = NextResponse.next();
   response.headers.set('Cache-Control', 'private, no-store, no-cache, must-revalidate');

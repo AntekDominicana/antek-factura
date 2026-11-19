@@ -93,8 +93,28 @@ async function bootstrap() {
   app.useGlobalFilters(new HardenedExceptionFilter());
 
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const staticAllowedOrigins = new Set([
+    frontendUrl,
+    'https://factura.antek.com.do',
+    'https://www.factura.antek.com.do',
+    'https://antek.com.do',
+    'https://www.antek.com.do',
+    'https://antek-factura.vercel.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ]);
   app.enableCors({
-    origin: [frontendUrl, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      if (!origin) return callback(null, true);
+      if (
+        staticAllowedOrigins.has(origin) ||
+        origin.endsWith('.antek.com.do') ||
+        origin.endsWith('.vercel.app')
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     exposedHeaders: ['X-XML-SHA256', 'Content-Disposition', 'X-Integrity-Signature'],

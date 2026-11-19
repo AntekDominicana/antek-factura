@@ -63,11 +63,14 @@ export default function SuperAdminPage() {
   const [activeTab, setActiveTab] = useState<'tenants' | 'plans' | 'payments' | 'audit'>('tenants');
   const [searchTenant, setSearchTenant] = useState('');
 
-  // Modal Enviar Factura / Link de Pago
+  // Modal Enviar Factura / Link de Pago con Descuento
   const [invoiceModalTenant, setInvoiceModalTenant] = useState<any | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({
     planCode: 'MEDIUM',
     billingCycle: 'MONTHLY' as 'MONTHLY' | 'ANNUAL',
+    baseAmount: 2450,
+    discountPercent: 0,
+    discountDop: 0,
     amount: 2450,
     invoiceNumber: '',
     checkoutUrl: '',
@@ -75,6 +78,24 @@ export default function SuperAdminPage() {
     months: 1,
     adminNote: '',
   });
+
+  // Modal Ver / Editar Datos Completos del Cliente
+  const [detailModalTenant, setDetailModalTenant] = useState<any | null>(null);
+  const [detailForm, setDetailForm] = useState({
+    razonSocial: '',
+    nombreComercial: '',
+    rnc: '',
+    correo: '',
+    telefono: '',
+    direccion: '',
+    environment: 'SANDBOX' as 'SANDBOX' | 'PRODUCTION',
+    planCode: 'MEDIUM',
+    status: 'ACTIVE' as 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED',
+    daysRemaining: 5,
+  });
+
+  // Descuentos rápidos por plan en Tab 2
+  const [planDiscountInput, setPlanDiscountInput] = useState<Record<string, number>>({});
 
   // Modal Activación / Estado / Cuota
   const [activateModalTenant, setActivateModalTenant] = useState<any | null>(null);
@@ -145,6 +166,9 @@ export default function SuperAdminPage() {
     setInvoiceForm({
       planCode: targetCode,
       billingCycle: reqCycle,
+      baseAmount: defaultAmount,
+      discountPercent: 0,
+      discountDop: 0,
       amount: defaultAmount,
       invoiceNumber: `FAC-ANTEK-${Date.now().toString().slice(-6)}`,
       checkoutUrl: defaultUrl,
@@ -154,10 +178,15 @@ export default function SuperAdminPage() {
     });
   };
 
+  const applyInvoiceDiscount = (base: number, pct: number, dop: number) => {
+    const afterPct = base * (1 - Math.min(99, Math.max(0, pct)) / 100);
+    return Math.max(1, Math.round(afterPct - Math.max(0, dop)));
+  };
+
   const handlePlanOrCycleChangeInInvoiceModal = (planCode: string, billingCycle: 'MONTHLY' | 'ANNUAL') => {
     const matchingPlan = plans.find((p) => p.code === planCode);
     const basePrice = Number(matchingPlan?.priceDop || 2450);
-    const calcAmount = billingCycle === 'ANNUAL' ? Math.round(basePrice * 10.2) : basePrice;
+    const calcBase = billingCycle === 'ANNUAL' ? Math.round(basePrice * 10.2) : basePrice;
     const presetLink =
       (billingCycle === 'ANNUAL' ? matchingPlan?.paymentLinkAnnual : matchingPlan?.paymentLinkMonthly) ||
       paymentSettings?.generalPaymentLink ||
@@ -167,10 +196,73 @@ export default function SuperAdminPage() {
       ...prev,
       planCode,
       billingCycle,
-      amount: calcAmount,
+      baseAmount: calcBase,
+      amount: applyInvoiceDiscount(calcBase, prev.discountPercent, prev.discountDop),
       months: billingCycle === 'ANNUAL' ? 12 : 1,
       checkoutUrl: presetLink,
     }));
+  };
+
+  const openDetailModal = (t: any) => {
+    const sub = t.subscription;
+    const endIso = sub?.graceEndsAt || sub?.trialEndsAt || sub?.currentPeriodEnd;
+    const calcDays =
+      typeof t.daysRemaining === 'number'
+        ? t.daysRemaining
+        : endIso
+        ? Math.max(0, Math.ceil((new Date(endIso).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+        : 5;
+
+    setDetailModalTenant(t);
+    setDetailForm({
+      razonSocial: t.razonSocial || '',
+      nombreComercial: t.nombreComercial || '',
+      rnc: t.rnc || '',
+      correo: t.correo || '',
+      telefono: t.telefono || '',
+      direccion: t.direccion || '',
+      environment: t.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
+      planCode: sub?.plan?.code || 'MEDIUM',
+      status:
+        sub?.status === 'PAST_DUE' || sub?.status === 'SUSPENDED' ? sub.status : 'ACTIVE',
+      daysRemaining: calcDays,
+    });
+  };
+
+  const handleSaveTenantDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!detailModalTenant) return;
+    try {
+      setActionLoading(true);
+      setErrorMsg(null);
+      await apiFetch<any>(`/v1/superadmin/tenants/${detailModalTenant.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...detailForm,
+          daysRemaining: Number(detailForm.daysRemaining),
+        }),
+      });
+      setDetailModalTenant(null);
+      showToast('Datos completos del cliente actualizados ✓');
+      await loadData();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Error al actualizar los datos del cliente.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const applyPlanDiscount = (planCode: string, pct: number) => {
+    const safePct = Math.min(95, Math.max(0, pct));
+    setPlanDiscountInput((prev) => ({ ...prev, [planCode]: safePct }));
+    setPlans((prev) =>
+      prev.map((p) => {
+        if (p.code !== planCode) return p;
+        const discountedDop = Math.max(100, Math.round(Number(p.priceDop) * (1 - safePct / 100)));
+        const discountedUsd = Math.max(2, Number((Number(p.priceUsd) * (1 - safePct / 100)).toFixed(2)));
+        return { ...p, priceDop: discountedDop, priceUsd: discountedUsd };
+      })
+    );
   };
 
   const handleSendInvoiceLink = async (e: React.FormEvent) => {
@@ -179,6 +271,16 @@ export default function SuperAdminPage() {
     try {
       setActionLoading(true);
       setErrorMsg(null);
+      const discountDesc =
+        invoiceForm.discountPercent > 0 || invoiceForm.discountDop > 0
+          ? `[Descuento aplicado: ${
+              invoiceForm.discountPercent > 0 ? `${invoiceForm.discountPercent}%` : ''
+            }${invoiceForm.discountPercent > 0 && invoiceForm.discountDop > 0 ? ' + ' : ''}${
+              invoiceForm.discountDop > 0 ? `${formatDOP(invoiceForm.discountDop)}` : ''
+            } sobre base ${formatDOP(invoiceForm.baseAmount)}] `
+          : '';
+      const composedNote = `${discountDesc}${invoiceForm.adminNote.trim()}`.trim();
+
       const res = await apiFetch<any>(
         `/v1/superadmin/tenants/${invoiceModalTenant.id}/send-invoice-link`,
         {
@@ -191,7 +293,7 @@ export default function SuperAdminPage() {
             checkoutUrl: invoiceForm.checkoutUrl.trim() || undefined,
             status: invoiceForm.status,
             months: Number(invoiceForm.months),
-            adminNote: invoiceForm.adminNote.trim() || undefined,
+            adminNote: composedNote || undefined,
           }),
         }
       );
@@ -311,10 +413,20 @@ export default function SuperAdminPage() {
   const filteredTenants = tenants.filter((t) => {
     const q = searchTenant.trim().toLowerCase();
     if (!q) return true;
+    const matchUser = Array.isArray(t.users)
+      ? t.users.some(
+          (u: any) =>
+            String(u.fullName || '').toLowerCase().includes(q) ||
+            String(u.email || '').toLowerCase().includes(q)
+        )
+      : false;
     return (
       String(t.razonSocial || '').toLowerCase().includes(q) ||
+      String(t.nombreComercial || '').toLowerCase().includes(q) ||
       String(t.rnc || '').toLowerCase().includes(q) ||
-      String(t.correo || '').toLowerCase().includes(q)
+      String(t.correo || '').toLowerCase().includes(q) ||
+      String(t.telefono || '').toLowerCase().includes(q) ||
+      matchUser
     );
   });
 
@@ -660,6 +772,14 @@ export default function SuperAdminPage() {
                             <div className="flex flex-wrap items-center justify-end gap-2">
                               <button
                                 type="button"
+                                onClick={() => openDetailModal(t)}
+                                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+                              >
+                                <Users className="w-3.5 h-3.5 text-sky-400" />
+                                <span>Ver / Editar</span>
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => openInvoiceLinkModal(t)}
                                 className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
                               >
@@ -779,6 +899,46 @@ export default function SuperAdminPage() {
                         }
                         className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 font-mono"
                       />
+                    </div>
+                  </div>
+
+                  {/* Aplicar Descuento Rápido al Plan */}
+                  <div className="p-2.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400 font-bold">Aplicar Descuento (%)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={95}
+                        placeholder="0%"
+                        value={planDiscountInput[plan.code] || ''}
+                        onChange={(e) => {
+                          const pct = Number(e.target.value);
+                          setPlanDiscountInput((prev) => ({ ...prev, [plan.code]: pct }));
+                        }}
+                        className="w-16 px-2 py-0.5 bg-slate-900 border border-slate-700 rounded text-right font-mono text-amber-300"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[10, 15, 20, 25, 50].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => applyPlanDiscount(plan.code, pct)}
+                          className="px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 font-bold text-[10px] cursor-pointer"
+                        >
+                          -{pct}%
+                        </button>
+                      ))}
+                      {(planDiscountInput[plan.code] || 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => applyPlanDiscount(plan.code, planDiscountInput[plan.code])}
+                          className="px-2 py-0.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] cursor-pointer"
+                        >
+                          Aplicar -{planDiscountInput[plan.code]}%
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1177,9 +1337,78 @@ export default function SuperAdminPage() {
               </div>
             </div>
 
+            {/* Descuento (% y DOP) */}
+            <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-300">
+                  Descuento Promocional (Base: {formatDOP(invoiceForm.baseAmount)})
+                </span>
+                <div className="flex items-center gap-1">
+                  {[0, 10, 15, 20, 50].map((pct) => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() =>
+                        setInvoiceForm((prev) => ({
+                          ...prev,
+                          discountPercent: pct,
+                          amount: applyInvoiceDiscount(prev.baseAmount, pct, prev.discountDop),
+                        }))
+                      }
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                        invoiceForm.discountPercent === pct
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      {pct === 0 ? 'Sin desc.' : `-${pct}%`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-400 mb-1">Descuento (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={invoiceForm.discountPercent}
+                    onChange={(e) => {
+                      const pct = Number(e.target.value);
+                      setInvoiceForm((prev) => ({
+                        ...prev,
+                        discountPercent: pct,
+                        amount: applyInvoiceDiscount(prev.baseAmount, pct, prev.discountDop),
+                      }));
+                    }}
+                    className="w-full p-2 bg-slate-900 border border-slate-800 rounded-xl text-amber-300 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-400 mb-1">Descuento Fijo (DOP)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={invoiceForm.discountDop}
+                    onChange={(e) => {
+                      const dop = Number(e.target.value);
+                      setInvoiceForm((prev) => ({
+                        ...prev,
+                        discountDop: dop,
+                        amount: applyInvoiceDiscount(prev.baseAmount, prev.discountPercent, dop),
+                      }));
+                    }}
+                    className="w-full p-2 bg-slate-900 border border-slate-800 rounded-xl text-amber-300 font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block font-bold text-slate-300 mb-1">Monto DOP</label>
+                <label className="block font-bold text-slate-300 mb-1">Monto Final DOP</label>
                 <input
                   type="number"
                   required
@@ -1344,6 +1573,215 @@ export default function SuperAdminPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL VER / EDITAR FICHA COMPLETA DEL CLIENTE */}
+      {detailModalTenant && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <form
+            onSubmit={handleSaveTenantDetails}
+            className="bg-slate-900 rounded-3xl max-w-2xl w-full border border-slate-800 shadow-2xl p-6 space-y-5 my-auto text-xs"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="font-black text-white text-lg">
+                  Ficha y Edición del Cliente
+                </h3>
+                <p className="text-slate-400 mt-0.5">
+                  Edita datos fiscales, contacto, plan, días restantes y consulta sus usuarios/pagos.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailModalTenant(null)}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Razón Social</label>
+                <input
+                  type="text"
+                  required
+                  value={detailForm.razonSocial}
+                  onChange={(e) => setDetailForm({ ...detailForm, razonSocial: e.target.value })}
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Nombre Comercial</label>
+                <input
+                  type="text"
+                  value={detailForm.nombreComercial}
+                  onChange={(e) => setDetailForm({ ...detailForm, nombreComercial: e.target.value })}
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">RNC / Cédula</label>
+                <input
+                  type="text"
+                  required
+                  value={detailForm.rnc}
+                  onChange={(e) => setDetailForm({ ...detailForm, rnc: e.target.value })}
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Correo Principal</label>
+                <input
+                  type="email"
+                  required
+                  value={detailForm.correo}
+                  onChange={(e) => setDetailForm({ ...detailForm, correo: e.target.value })}
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sky-300"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Teléfono / WhatsApp</label>
+                <input
+                  type="text"
+                  value={detailForm.telefono}
+                  onChange={(e) => setDetailForm({ ...detailForm, telefono: e.target.value })}
+                  placeholder="809-000-0000"
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-emerald-300 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Ambiente DGII</label>
+                <select
+                  value={detailForm.environment}
+                  onChange={(e) =>
+                    setDetailForm({
+                      ...detailForm,
+                      environment: e.target.value as 'SANDBOX' | 'PRODUCTION',
+                    })
+                  }
+                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-semibold"
+                >
+                  <option value="SANDBOX">SANDBOX (Pruebas)</option>
+                  <option value="PRODUCTION">PRODUCTION (Producción)</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-300 mb-1">Dirección Física</label>
+              <input
+                type="text"
+                value={detailForm.direccion}
+                onChange={(e) => setDetailForm({ ...detailForm, direccion: e.target.value })}
+                className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-200"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Plan</label>
+                <select
+                  value={detailForm.planCode}
+                  onChange={(e) => setDetailForm({ ...detailForm, planCode: e.target.value })}
+                  className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-semibold"
+                >
+                  {plans.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.name} ({formatDOP(p.priceDop)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Estado</label>
+                <select
+                  value={detailForm.status}
+                  onChange={(e) =>
+                    setDetailForm({
+                      ...detailForm,
+                      status: e.target.value as 'ACTIVE' | 'PAST_DUE' | 'SUSPENDED',
+                    })
+                  }
+                  className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-semibold"
+                >
+                  <option value="ACTIVE">ACTIVO</option>
+                  <option value="PAST_DUE">EN PRUEBA / GRACIA</option>
+                  <option value="SUSPENDED">SUSPENDIDO</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Días Restantes</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={detailForm.daysRemaining}
+                  onChange={(e) =>
+                    setDetailForm({ ...detailForm, daysRemaining: Number(e.target.value) })
+                  }
+                  className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-amber-300 font-mono font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Usuarios registrados en la empresa */}
+            <div className="space-y-2">
+              <div className="font-bold text-slate-300">
+                Usuarios de la Empresa ({detailModalTenant.users?.length || 0})
+              </div>
+              <div className="max-h-32 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 divide-y divide-slate-800/70">
+                {Array.isArray(detailModalTenant.users) && detailModalTenant.users.length > 0 ? (
+                  detailModalTenant.users.map((u: any) => (
+                    <div key={u.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="font-bold text-white">{u.fullName}</span>
+                        <span className="text-slate-400 ml-2">{u.email}</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded bg-slate-800 text-sky-300 font-bold text-[10px]">
+                        {u.role} · {u.isActive ? 'Activo' : 'Inactivo'}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-3 py-2 text-slate-500">Sin usuarios listados</div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = detailModalTenant;
+                  setDetailModalTenant(null);
+                  openInvoiceLinkModal(target);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Enviar Factura / Link con Descuento</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDetailModalTenant(null)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white font-semibold hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold cursor-pointer disabled:opacity-50"
+                >
+                  {actionLoading ? 'Guardando...' : 'Guardar Datos del Cliente'}
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       )}
     </div>

@@ -90,6 +90,31 @@ export class SuperAdminController {
     return this.superAdminService.getAllTenants();
   }
 
+  @Put('tenants/:id')
+  @ApiOperation({ summary: 'Actualizar datos completos, plan, estado y días de un cliente (Admin Root)' })
+  @ApiHeader({ name: 'X-SuperAdmin-Secret', required: false })
+  async updateTenant(
+    @Param('id') tenantId: string,
+    @Body()
+    body: {
+      razonSocial?: string;
+      nombreComercial?: string;
+      rnc?: string;
+      correo?: string;
+      telefono?: string;
+      direccion?: string;
+      environment?: 'SANDBOX' | 'PRODUCTION';
+      planCode?: string;
+      status?: SubscriptionStatus;
+      daysRemaining?: number;
+    },
+    @Req() req: any,
+    @Headers('X-SuperAdmin-Secret') secret?: string
+  ): Promise<any> {
+    const adminId = await this.verifySuperAdmin(req, secret);
+    return this.superAdminService.updateTenantDetails(tenantId, body, adminId);
+  }
+
   @Post('tenants/:id/activate-plan')
   @ApiOperation({ summary: 'Activación manual de suscripción o cambio de estado por administrador' })
   @ApiHeader({ name: 'X-SuperAdmin-Secret', required: false })

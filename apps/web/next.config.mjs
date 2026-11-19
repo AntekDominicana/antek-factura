@@ -4,6 +4,15 @@ const nextConfig = {
   transpilePackages: ['@factura-ecf/fiscal-engine'],
   productionBrowserSourceMaps: false,
   poweredByHeader: false,
+  async rewrites() {
+    const apiTarget = process.env.NEXT_PUBLIC_API_URL || 'https://antek-factura-api.onrender.com';
+    return [
+      {
+        source: '/v1/:path*',
+        destination: `${apiTarget}/v1/:path*`,
+      },
+    ];
+  },
   async headers() {
     return [
       {

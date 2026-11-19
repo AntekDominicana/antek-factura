@@ -1,26 +1,23 @@
-const CACHE_NAME = 'antek-factura-pwa-v1';
+const CACHE_NAME = 'antek-factura-pwa-v4';
 const STATIC_ASSETS = [
-  '/',
-  '/app/dashboard',
   '/manifest.json',
+  '/favicon.png',
+  '/brand/icon-a.png',
+  '/brand/logo-dark.png',
   '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/icons/icon-maskable-512.png',
 ];
 
-// Instalación del Service Worker: precacheo del shell básico
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('[PWA SW] Precache error:', err);
+        console.warn('[PWA SW] Precache warning:', err);
       });
     })
   );
 });
 
-// Activación: limpieza de cachés antiguas para actualizaciones automáticas sin intervención
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
@@ -34,38 +31,46 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Estrategia de peticiones:
-// - Para API /v1/*: Network-Only / Network-First (datos en vivo DGII estrictos)
-// - Para assets estáticos e imágenes: Stale-While-Revalidate
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  const req = event.request;
+  if (req.method !== 'GET') return;
 
-  // Evitar interceptar endpoints de la API o webhooks para no servir datos fiscales desactualizados
-  if (url.pathname.startsWith('/v1/') || url.pathname.startsWith('/api/')) {
+  const url = new URL(req.url);
+
+  // Nunca interceptar navegaciones HTML, redirecciones de Next.js, RSC ni endpoints API
+  if (
+    req.mode === 'navigate' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/v1/') ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/_next/') ||
+    url.searchParams.has('_rsc')
+  ) {
     return;
   }
 
-  // Peticiones no GET pasan directo
-  if (event.request.method !== 'GET') {
-    return;
-  }
+  // Solo cachear imágenes estáticas / íconos / manifest
+  const isStaticAsset =
+    url.pathname.startsWith('/brand/') ||
+    url.pathname.startsWith('/icons/') ||
+    url.pathname === '/favicon.png' ||
+    url.pathname === '/manifest.json';
+
+  if (!isStaticAsset) return;
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request)
+    caches.match(req).then((cachedResponse) => {
+      const fetchPromise = fetch(req)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
+              cache.put(req, responseToCache);
             });
           }
           return networkResponse;
         })
-        .catch(() => {
-          // Si offline, retorna el cachedResponse si existe
-          return cachedResponse;
-        });
+        .catch(() => cachedResponse || Response.error());
 
       return cachedResponse || fetchPromise;
     })

@@ -51,6 +51,24 @@ export async function ensureAuthToken(): Promise<string | null> {
   return fetchSessionToken();
 }
 
+async function fetchWithSameOriginFallback(
+  path: string,
+  init: RequestInit
+): Promise<Response> {
+  const canUseSameOrigin = typeof window !== 'undefined' && path.startsWith('/v1/');
+  if (canUseSameOrigin) {
+    try {
+      const sameOriginRes = await fetch(path, init);
+      if (sameOriginRes.status !== 404 && sameOriginRes.status !== 502 && sameOriginRes.status !== 503 && sameOriginRes.status !== 504) {
+        return sameOriginRes;
+      }
+    } catch {
+      // Fallback al dominio directo del API
+    }
+  }
+  return fetch(`${API_BASE_URL}${path}`, init);
+}
+
 export async function apiFetch<T = any>(path: string, options?: RequestInit): Promise<T> {
   const buildHeaders = (token: string | null): Record<string, string> => {
     const headers: Record<string, string> = {
@@ -64,22 +82,32 @@ export async function apiFetch<T = any>(path: string, options?: RequestInit): Pr
   };
 
   let token = await ensureAuthToken();
-  let res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    credentials: 'include',
-    headers: buildHeaders(token),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithSameOriginFallback(path, {
+      ...options,
+      credentials: 'include',
+      headers: buildHeaders(token),
+    });
 
-  if (res.status === 401 && typeof window !== 'undefined') {
-    const freshToken = await fetchSessionToken();
-    if (freshToken && freshToken !== token) {
-      token = freshToken;
-      res = await fetch(`${API_BASE_URL}${path}`, {
-        ...options,
-        credentials: 'include',
-        headers: buildHeaders(token),
-      });
+    if (res.status === 401 && typeof window !== 'undefined') {
+      const freshToken = await fetchSessionToken();
+      if (freshToken && freshToken !== token) {
+        token = freshToken;
+        res = await fetchWithSameOriginFallback(path, {
+          ...options,
+          credentials: 'include',
+          headers: buildHeaders(token),
+        });
+      }
     }
+  } catch (networkErr: any) {
+    const raw = String(networkErr?.message || '');
+    throw new Error(
+      /failed to fetch|network/i.test(raw)
+        ? 'No pudimos conectar con el servidor. Verifica tu conexión e inténtalo de nuevo.'
+        : raw || 'Error de red.'
+    );
   }
 
   const contentType = res.headers.get('content-type') || '';
@@ -111,7 +139,7 @@ export async function apiDownload(path: string, fallbackFilename: string): Promi
   const makeHeaders = (t: string | null): Record<string, string> =>
     t ? { Authorization: `Bearer ${t}` } : {};
 
-  let res = await fetch(`${API_BASE_URL}${path}`, {
+  let res = await fetchWithSameOriginFallback(path, {
     method: 'GET',
     credentials: 'include',
     headers: makeHeaders(token),
@@ -121,7 +149,7 @@ export async function apiDownload(path: string, fallbackFilename: string): Promi
     const freshToken = await fetchSessionToken();
     if (freshToken && freshToken !== token) {
       token = freshToken;
-      res = await fetch(`${API_BASE_URL}${path}`, {
+      res = await fetchWithSameOriginFallback(path, {
         method: 'GET',
         credentials: 'include',
         headers: makeHeaders(token),

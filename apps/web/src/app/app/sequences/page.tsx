@@ -98,9 +98,19 @@ export default function SequencesPage() {
       </div>
 
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-          <span>{error}</span>
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{/failed to fetch/i.test(error) ? 'No pudimos cargar las secuencias. Reintenta en un momento.' : error}</span>
+          </div>
+          <button
+            type="button"
+            onClick={loadSequences}
+            disabled={loading}
+            className="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-xs cursor-pointer disabled:opacity-50"
+          >
+            Reintentar
+          </button>
         </div>
       )}
 

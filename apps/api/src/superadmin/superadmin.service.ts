@@ -348,6 +348,102 @@ export class SuperAdminService {
   }
 
   /**
+   * Actualizar datos completos, plan, estado y días restantes de un cliente
+   */
+  async updateTenantDetails(
+    tenantId: string,
+    dto: {
+      razonSocial?: string;
+      nombreComercial?: string;
+      rnc?: string;
+      correo?: string;
+      telefono?: string;
+      direccion?: string;
+      environment?: 'SANDBOX' | 'PRODUCTION';
+      planCode?: string;
+      status?: SubscriptionStatus;
+      daysRemaining?: number;
+    },
+    adminUserId?: string
+  ): Promise<any> {
+    const existing = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: { subscription: { include: { plan: true } } },
+    });
+    if (!existing) throw new NotFoundException('Empresa no encontrada.');
+
+    const updatedTenant = await prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        razonSocial: dto.razonSocial !== undefined ? dto.razonSocial.trim() : existing.razonSocial,
+        nombreComercial:
+          dto.nombreComercial !== undefined ? dto.nombreComercial.trim() : existing.nombreComercial,
+        rnc: dto.rnc !== undefined ? dto.rnc.replace(/\D/g, '') : existing.rnc,
+        correo: dto.correo !== undefined ? dto.correo.trim().toLowerCase() : existing.correo,
+        telefono: dto.telefono !== undefined ? dto.telefono.trim() : existing.telefono,
+        direccion: dto.direccion !== undefined ? dto.direccion.trim() : existing.direccion,
+        environment:
+          dto.environment === 'PRODUCTION' || dto.environment === 'SANDBOX'
+            ? dto.environment
+            : existing.environment,
+      },
+    });
+
+    if (dto.planCode || dto.status || dto.daysRemaining !== undefined) {
+      await this.billingService.getPlans();
+      const targetCode = (dto.planCode || existing.subscription?.plan?.code || 'MEDIUM').toUpperCase();
+      const plan = await prisma.plan.findUnique({ where: { code: targetCode } });
+
+      if (plan) {
+        const now = new Date();
+        const periodEnd =
+          dto.daysRemaining !== undefined && !isNaN(Number(dto.daysRemaining))
+            ? new Date(now.getTime() + Math.max(0, Number(dto.daysRemaining)) * 86400000)
+            : existing.subscription?.currentPeriodEnd || new Date(now.getTime() + 5 * 86400000);
+
+        await prisma.subscription.upsert({
+          where: { tenantId },
+          update: {
+            planId: plan.id,
+            status: dto.status || existing.subscription?.status || 'ACTIVE',
+            currentPeriodEnd: periodEnd,
+          },
+          create: {
+            tenantId,
+            planId: plan.id,
+            status: dto.status || 'ACTIVE',
+            currentPeriodStart: now,
+            currentPeriodEnd: periodEnd,
+          },
+        });
+      }
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId,
+        userId: adminUserId || 'SUPERADMIN',
+        action: 'TENANT_UPDATED_BY_SUPERADMIN',
+        entity: 'Tenant',
+        entityId: tenantId,
+        oldPayload: {
+          razonSocial: existing.razonSocial,
+          rnc: existing.rnc,
+          correo: existing.correo,
+          telefono: existing.telefono,
+        },
+        newPayload: dto as any,
+      },
+    });
+
+    return {
+      success: true,
+      message: `Datos de ${updatedTenant.razonSocial} actualizados correctamente.`,
+      tenant: updatedTenant,
+    };
+  }
+
+  /**
    * Ajuste de cuota de e-CF mensual para un tenant específico
    */
   async adjustInvoiceQuota(tenantId: string, additionalQuota: number): Promise<any> {

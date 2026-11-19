@@ -30,6 +30,7 @@ export function PwaInstallPrompt() {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
+          reg.update().catch(() => {});
           // Chequear actualizaciones del SW automáticamente
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
