@@ -3,12 +3,11 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
-  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { prisma } from '@factura-ecf/database';
-import * as crypto from 'crypto';
 import { CacheService } from '../cache.service';
+import { CryptoService } from '../crypto.service';
 
 export interface AuthenticatedUserContext {
   userId?: string;
@@ -19,11 +18,22 @@ export interface AuthenticatedUserContext {
   authType: 'JWT' | 'API_KEY' | 'SYSTEM';
 }
 
+interface CachedTenantApiKeyCandidate {
+  id: string;
+  tenantId: string;
+  userId?: string | null;
+  keyHash: string;
+  environment: 'SANDBOX' | 'PRODUCTION';
+  isActive: boolean;
+  revoked: boolean;
+}
+
 @Injectable()
 export class TenantAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
-    private readonly cacheService: CacheService
+    private readonly cacheService: CacheService,
+    private readonly cryptoService: CryptoService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -42,7 +52,8 @@ export class TenantAuthGuard implements CanActivate {
       : undefined;
     const isBearerApiKey = Boolean(
       bearerToken &&
-        (bearerToken.startsWith('ak_') ||
+        (bearerToken.startsWith('sk_') ||
+          bearerToken.startsWith('ak_') ||
           bearerToken.startsWith('ecf_') ||
           bearerToken.startsWith('antk_'))
     );
@@ -109,62 +120,57 @@ export class TenantAuthGuard implements CanActivate {
       }
     }
 
-    // Caso B: API Key en Authorization Bearer ak_live_... o X-API-Key (Integraciones B2B / ERP / POS)
+    // Caso B: API Key en Authorization Bearer sk_live_... / ak_live_... o X-API-Key
     const rawApiKeyCandidate =
       (isBearerApiKey ? bearerToken : undefined) ||
       (apiKeyHeader ? String(apiKeyHeader).trim() : undefined);
 
     if (!authContext && rawApiKeyCandidate) {
       const rawKey = rawApiKeyCandidate;
-      const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+      const hmacHash = this.cryptoService.hashApiKey(rawKey);
+      const legacyHash = rawKey.startsWith('sk_') ? null : this.cryptoService.hashSha256(rawKey);
+      const keyPrefix = rawKey.slice(0, 12);
+      const cacheKey = `apikey_prefix:${keyPrefix}`;
 
-      // Intentar obtener de caché Redis (30s para reflejar revocaciones con rapidez)
-      const cacheKey = `apikey:${keyHash.slice(0, 16)}`;
-      const cachedTenant = await this.cacheService.get<{
-        id?: string;
-        tenantId: string;
-        environment: 'SANDBOX' | 'PRODUCTION';
-        revoked?: boolean;
-      }>(cacheKey);
+      let candidates = await this.cacheService.get<CachedTenantApiKeyCandidate[]>(cacheKey);
 
-      if (cachedTenant && !cachedTenant.revoked) {
+      if (!candidates) {
+        const dbRecords = await prisma.apiKey.findMany({
+          where: { keyPrefix },
+          include: { tenant: { select: { id: true, environment: true } } },
+        });
+        candidates = dbRecords
+          .filter((r) => Boolean(r.tenant))
+          .map((r) => ({
+            id: r.id,
+            tenantId: r.tenantId,
+            userId: r.createdByUserId || null,
+            keyHash: r.keyHash,
+            environment: (r.tenant.environment || r.environment) as 'SANDBOX' | 'PRODUCTION',
+            isActive: r.isActive,
+            revoked: Boolean(r.revoked),
+          }));
+        if (candidates.length > 0) {
+          await this.cacheService.set(cacheKey, candidates, 30);
+        }
+      }
+
+      const matched = (candidates || []).find(
+        (c) =>
+          this.cryptoService.verifyHashTimingSafe(hmacHash, c.keyHash) ||
+          (Boolean(legacyHash) && this.cryptoService.verifyHashTimingSafe(legacyHash!, c.keyHash))
+      );
+
+      if (matched && matched.isActive && !matched.revoked) {
         authContext = {
-          tenantId: cachedTenant.tenantId,
-          environment: cachedTenant.environment,
+          userId: matched.userId || undefined,
+          tenantId: matched.tenantId,
+          environment: matched.environment,
           authType: 'API_KEY',
         };
-        if (cachedTenant.id) {
-          prisma.apiKey
-            .update({ where: { id: cachedTenant.id }, data: { lastUsedAt: new Date() } })
-            .catch(() => undefined);
-        }
-      } else {
-        // Consultar en PostgreSQL
-        const apiKeyRecord = await prisma.apiKey.findUnique({
-          where: { keyHash },
-          include: { tenant: true },
-        });
-
-        if (apiKeyRecord && apiKeyRecord.isActive && !apiKeyRecord.revoked && apiKeyRecord.tenant) {
-          authContext = {
-            tenantId: apiKeyRecord.tenantId,
-            environment: (apiKeyRecord.tenant.environment || apiKeyRecord.environment) as 'SANDBOX' | 'PRODUCTION',
-            authType: 'API_KEY',
-          };
-          prisma.apiKey
-            .update({ where: { id: apiKeyRecord.id }, data: { lastUsedAt: new Date() } })
-            .catch(() => undefined);
-          await this.cacheService.set(
-            cacheKey,
-            {
-              id: apiKeyRecord.id,
-              tenantId: apiKeyRecord.tenantId,
-              environment: authContext.environment,
-              revoked: false,
-            },
-            30
-          );
-        }
+        prisma.apiKey
+          .update({ where: { id: matched.id }, data: { lastUsedAt: new Date() } })
+          .catch(() => undefined);
       }
     }
 
@@ -194,7 +200,6 @@ export class TenantAuthGuard implements CanActivate {
     // Nunca permitir que el cliente sobreescriba tenantId desde query, body o headers no autenticados
     if (req.body && typeof req.body === 'object') {
       if ('tenantId' in req.body && req.body.tenantId !== authContext.tenantId) {
-        // Forzar o anular el tenantId del body
         req.body.tenantId = authContext.tenantId;
       }
     }

@@ -56,6 +56,10 @@ export class IntegrationsService implements OnModuleInit {
     try {
       await prisma.$executeRawUnsafe(`
         ALTER TABLE "ApiKey"
+          ADD COLUMN IF NOT EXISTS "user_id" TEXT;
+      `);
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "ApiKey"
           ADD COLUMN IF NOT EXISTS "scopes" TEXT[] NOT NULL DEFAULT ARRAY['invoices:write', 'invoices:read']::TEXT[];
       `);
       await prisma.$executeRawUnsafe(`
@@ -63,14 +67,23 @@ export class IntegrationsService implements OnModuleInit {
           ADD COLUMN IF NOT EXISTS "revoked" BOOLEAN NOT NULL DEFAULT false;
       `);
       await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "ApiKey_keyPrefix_idx" ON "ApiKey"("keyPrefix");
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "ApiKey_user_id_idx" ON "ApiKey"("user_id");
+      `);
+      await prisma.$executeRawUnsafe(`DROP VIEW IF EXISTS "api_keys";`);
+      await prisma.$executeRawUnsafe(`
         CREATE OR REPLACE VIEW "api_keys" AS
         SELECT
           "id",
           "tenantId" AS "empresa_id",
+          "user_id",
           "name" AS "nombre",
           "keyHash" AS "key_hash",
           "keyPrefix" AS "prefijo_visible",
           "scopes",
+          "isActive" AS "activa",
           ("revoked" OR NOT "isActive") AS "revocada",
           "lastUsedAt" AS "ultimo_uso",
           "createdAt" AS "creada_en"
@@ -147,12 +160,13 @@ export class IntegrationsService implements OnModuleInit {
   }
 
   // ============================================================================
-  // 1. GESTIÓN DE API KEYS POR EMPRESA ("ak_live_" + 48 hex)
+  // 1. GESTIÓN DE API KEYS POR EMPRESA ("sk_live_" + HMAC-SHA256 + API_KEY_PEPPER)
   // ============================================================================
 
   public async createCompanyApiKey(
     tenantId: string,
-    dto: { nombre?: string; name?: string; scopes?: string[] }
+    dto: { nombre?: string; name?: string; scopes?: string[] },
+    userId?: string
   ) {
     await this.ensureIntegrationSchema();
     const nombre = String(dto?.nombre || dto?.name || '').trim();
@@ -180,17 +194,15 @@ export class IntegrationsService implements OnModuleInit {
       scopes.push('invoices:write', 'invoices:read');
     }
 
-    // Formato requerido: "ak_live_" + 48 caracteres hexadecimales criptográficos
-    const randomHex = crypto.randomBytes(24).toString('hex');
-    const rawKey = `ak_live_${randomHex}`;
-    const keyHash = this.cryptoService.hashSha256(rawKey);
-    const prefijoVisible = rawKey.slice(0, 12); // ej. "ak_live_3f9a"
+    // Genera "sk_live_" + 64 hex (256-bit CSPRNG) y calcula HMAC-SHA256 con API_KEY_PEPPER
+    const { rawKey, keyPrefix, keyHash } = this.cryptoService.generateApiKey('sk_live_');
 
     const created = await prisma.apiKey.create({
       data: {
         tenantId,
+        createdByUserId: userId || null,
         name: nombre.slice(0, 80),
-        keyPrefix: prefijoVisible,
+        keyPrefix,
         keyHash,
         encryptedKeyVault: null, // Nunca guardar clave en texto plano ni reversible
         scopes,
@@ -200,10 +212,14 @@ export class IntegrationsService implements OnModuleInit {
       },
     });
 
+    await this.cacheService.del(`pub_apikey_prefix:${created.keyPrefix}`);
+    await this.cacheService.del(`apikey_prefix:${created.keyPrefix}`);
+
     await prisma.auditLog
       .create({
         data: {
           tenantId,
+          userId: userId || null,
           action: 'API_KEY_CREATED',
           entity: 'ApiKey',
           entityId: created.id,
@@ -211,6 +227,7 @@ export class IntegrationsService implements OnModuleInit {
             name: created.name,
             keyPrefix: created.keyPrefix,
             scopes: created.scopes,
+            userId: created.createdByUserId,
           },
         },
       })
@@ -220,10 +237,11 @@ export class IntegrationsService implements OnModuleInit {
       id: created.id,
       nombre: created.name,
       prefijo_visible: created.keyPrefix,
+      user_id: created.createdByUserId,
       scopes: created.scopes,
       key: rawKey,
       creada_en: created.createdAt.toISOString(),
-      advertencia: 'Copia esta API Key ahora. Por seguridad no se volverá a mostrar.',
+      advertencia: 'Copia esta API Key ahora. Por seguridad solo guardamos su HMAC-SHA256 y no se volverá a mostrar.',
     };
   }
 
@@ -234,6 +252,7 @@ export class IntegrationsService implements OnModuleInit {
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
+        createdByUserId: true,
         name: true,
         keyPrefix: true,
         scopes: true,
@@ -246,6 +265,7 @@ export class IntegrationsService implements OnModuleInit {
 
     return rows.map((k) => ({
       id: k.id,
+      user_id: k.createdByUserId || null,
       nombre: k.name,
       prefijo_visible: k.keyPrefix,
       scopes:
@@ -275,7 +295,9 @@ export class IntegrationsService implements OnModuleInit {
     });
 
     await this.cacheService.del(`pub_apikey:${existing.keyHash.slice(0, 24)}`);
+    await this.cacheService.del(`pub_apikey_prefix:${existing.keyPrefix}`);
     await this.cacheService.del(`apikey:${existing.keyHash.slice(0, 16)}`);
+    await this.cacheService.del(`apikey_prefix:${existing.keyPrefix}`);
 
     await prisma.auditLog
       .create({

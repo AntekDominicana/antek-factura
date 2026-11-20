@@ -129,7 +129,11 @@ export class TenantIntegrationsController {
 
   @Post('api-keys')
   createApiKey(@Req() req: any, @Body() body: any) {
-    return this.integrationsService.createCompanyApiKey(this.requireTenantId(req), body);
+    return this.integrationsService.createCompanyApiKey(
+      this.requireTenantId(req),
+      body,
+      req.user?.userId || req.user?.sub
+    );
   }
 
   @Delete('api-keys/:id')

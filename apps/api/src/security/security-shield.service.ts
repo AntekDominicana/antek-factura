@@ -77,6 +77,8 @@ export class SecurityShieldService {
       path.startsWith('/v1/integrations') ||
       path.startsWith('/v1/webhooks') ||
       authHeader.startsWith('Bearer ak_') ||
+      authHeader.startsWith('Bearer sk_') ||
+      Boolean(req.headers['x-api-key']) ||
       Boolean(req.headers['x-uber-signature']) ||
       Boolean(req.headers['x-pedidosya-signature']);
 

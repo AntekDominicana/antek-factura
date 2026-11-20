@@ -7,14 +7,16 @@ Página web interactiva: `https://factura.antek.com.do/docs/api`
 
 ## 1. Autenticación
 
-Todas las llamadas desde POS o páginas web propias requieren una API Key generada en **Configuración → Integraciones & API** usando el header estándar:
+Todas las llamadas desde POS o páginas web propias requieren una API Key generada en **Configuración → Integraciones & API** usando el header estándar Bearer o `X-API-Key`:
 
 ```http
-Authorization: Bearer ak_live_<48_caracteres_hex>
+Authorization: Bearer sk_live_<64_caracteres_hex>
+# o alternativamente:
+X-API-Key: sk_live_<64_caracteres_hex>
 ```
 
-- Formato de la clave: `ak_live_` + 48 caracteres hexadecimales criptográficos (`crypto.randomBytes(24)`).
-- La clave completa se muestra **una sola vez** al crearla. En base de datos solo se guarda el hash `SHA-256`.
+- Formato de la clave: `sk_live_` + 64 caracteres hexadecimales criptográficos (`crypto.randomBytes(32)`). (Compatibilidad retroactiva mantenida con claves `ak_live_`).
+- La clave completa se muestra **una sola vez** al crearla. En base de datos nunca se almacena en texto plano: únicamente guardamos su hash **`HMAC-SHA256` con `API_KEY_PEPPER`** y validamos en cada petición usando comparación en tiempo constante (`crypto.timingSafeEqual`).
 - Rate Limit por API Key: **60 peticiones por minuto**. Al superar este límite responde HTTP `429`.
 
 ---
@@ -33,7 +35,7 @@ Envía una venta desde cualquier POS o tienda web hecha en código. ANTEK Factur
 ```bash
 curl -X POST https://factura.antek.com.do/api/v1/invoices \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ak_live_TU_API_KEY" \
+  -H "Authorization: Bearer sk_live_TU_API_KEY" \
   -d '{
     "external_id": "ORD-POS-00481",
     "tipo_ecf": 32,
@@ -62,7 +64,7 @@ curl -X POST https://factura.antek.com.do/api/v1/invoices \
 ```bash
 curl -X POST https://factura.antek.com.do/api/v1/invoices \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ak_live_TU_API_KEY" \
+  -H "Authorization: Bearer sk_live_TU_API_KEY" \
   -d '{
     "external_id": "WEB-CARRITO-9921",
     "tipo_ecf": 31,
@@ -103,14 +105,14 @@ curl -X POST https://factura.antek.com.do/api/v1/invoices \
 Consulta por ID interno o por `encf`:
 ```bash
 curl -X GET https://factura.antek.com.do/api/v1/invoices/E320000000001 \
-  -H "Authorization: Bearer ak_live_TU_API_KEY"
+  -H "Authorization: Bearer sk_live_TU_API_KEY"
 ```
 
 ### `GET /api/v1/invoices?external_id=...`
 Consulta la trazabilidad y comprobante emitido usando el ID de la venta en tu POS o plataforma:
 ```bash
 curl -X GET "https://factura.antek.com.do/api/v1/invoices?external_id=ORD-POS-00481" \
-  -H "Authorization: Bearer ak_live_TU_API_KEY"
+  -H "Authorization: Bearer sk_live_TU_API_KEY"
 ```
 
 ---

@@ -1,14 +1,16 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../../../context/AppContext';
+import { lookupRncClient } from '../../../../lib/api';
 import {
-  Building2,
   Upload,
   CheckCircle2,
+  AlertCircle,
   Printer,
-  ShieldCheck,
+  Search,
   Save,
+  Loader2,
 } from 'lucide-react';
 
 export default function CompanySettingsPage() {
@@ -21,15 +23,100 @@ export default function CompanySettingsPage() {
     direccion: tenant?.direccion || '',
     telefono: tenant?.telefono || '',
     brandColor: tenant?.brandColor || '#0284c7',
-    invoiceFooter: tenant?.invoiceFooter || 'Gracias por preferirnos — Comprobante Fiscal Electrónico emitido con ANTEK Factura',
+    invoiceFooter:
+      tenant?.invoiceFooter ||
+      'Gracias por preferirnos — Comprobante Fiscal Electrónico emitido con ANTEK Factura',
     logoBase64: tenant?.logoBase64 || '',
   });
 
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [rncLookingUp, setRncLookingUp] = useState(false);
+  const [rncStatus, setRncStatus] = useState<string | null>(null);
+  const [rncError, setRncError] = useState<string | null>(null);
+  const [rncValid, setRncValid] = useState<boolean | null>(null);
+
+  // Sincronizar cuando tenant termina de hidratar desde contexto
+  useEffect(() => {
+    if (!tenant?.id) return;
+    setForm((prev) => ({
+      ...prev,
+      rnc: prev.rnc || tenant.rnc || '',
+      razonSocial: prev.razonSocial || tenant.razonSocial || '',
+      nombreComercial: prev.nombreComercial || tenant.nombreComercial || '',
+      direccion: prev.direccion || tenant.direccion || '',
+      telefono: prev.telefono || tenant.telefono || '',
+      brandColor: tenant.brandColor || prev.brandColor,
+      invoiceFooter: tenant.invoiceFooter || prev.invoiceFooter,
+      logoBase64: tenant.logoBase64 ?? prev.logoBase64,
+    }));
+  }, [tenant?.id]);
+
+  const runRncLookup = useCallback(async (rawRnc: string, overwriteNames = true) => {
+    const clean = rawRnc.replace(/\D/g, '');
+    if (clean.length !== 9 && clean.length !== 11) {
+      setRncValid(false);
+      setRncStatus(null);
+      setRncError('El RNC debe tener 9 dígitos o la Cédula 11 dígitos numéricos.');
+      return;
+    }
+
+    setRncLookingUp(true);
+    setRncStatus(null);
+    setRncError(null);
+
+    const res = await lookupRncClient(clean);
+    setRncLookingUp(false);
+
+    if (!res.ok || !res.data) {
+      setRncValid(false);
+      setRncError(
+        res.error || 'El RNC o Cédula ingresado no tiene un dígito verificador válido en DGII.'
+      );
+      return;
+    }
+
+    const data = res.data;
+    setRncValid(true);
+    const isGeneric =
+      data.foundInPadron === false ||
+      /^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(data.razonSocial);
+
+    if (!isGeneric && data.razonSocial) {
+      if (overwriteNames) {
+        setForm((prev) => ({
+          ...prev,
+          razonSocial: data.razonSocial,
+          nombreComercial: data.nombreComercial || data.razonSocial,
+        }));
+      }
+      setRncStatus(`Validado DGII (${data.estado || 'ACTIVO'}): ${data.razonSocial}`);
+    } else {
+      setRncStatus('Dígito verificador válido · Puedes editar o confirmar tu Razón Social');
+    }
+  }, []);
+
+  // Autocompletar al escribir 9 u 11 dígitos en RNC (sin sobreescribir si ya coincide con tenant inicial al montar)
+  useEffect(() => {
+    const clean = form.rnc.replace(/\D/g, '');
+    const initialRnc = String(tenant?.rnc || '').replace(/\D/g, '');
+    if (clean.length !== 9 && clean.length !== 11) {
+      setRncStatus(null);
+      setRncError(null);
+      setRncValid(null);
+      return;
+    }
+    const isInitialUntouched = Boolean(initialRnc && clean === initialRnc && form.razonSocial);
+    const timer = setTimeout(() => {
+      runRncLookup(clean, !isInitialUntouched);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [form.rnc]);
 
   // Compresor automático en el navegador con HTML5 Canvas (sin límite de MB)
-  const compressImage = (file: File): Promise<{ dataUrl: string; origSize: number; compSize: number }> => {
+  const compressImage = (
+    file: File
+  ): Promise<{ dataUrl: string; origSize: number; compSize: number }> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new Error('Error leyendo archivo'));
@@ -52,7 +139,12 @@ export default function CompanySettingsPage() {
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
-          if (!ctx) return resolve({ dataUrl: String(reader.result || ''), origSize: file.size, compSize: file.size });
+          if (!ctx)
+            return resolve({
+              dataUrl: String(reader.result || ''),
+              origSize: file.size,
+              compSize: file.size,
+            });
 
           const isPng = file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
           if (!isPng) {
@@ -95,7 +187,11 @@ export default function CompanySettingsPage() {
 
       setForm((prev) => ({ ...prev, logoBase64: dataUrl }));
       await updateTenant({ logoBase64: dataUrl });
-      setSuccessMsg(`Logo optimizado y guardado con éxito (${origSize > 1024 * 1024 ? `${origMb} MB` : `${Math.round(origSize / 1024)} KB`} ➔ ${compKb} KB) ✓`);
+      setSuccessMsg(
+        `Logo optimizado y guardado con éxito (${
+          origSize > 1024 * 1024 ? `${origMb} MB` : `${Math.round(origSize / 1024)} KB`
+        } ➔ ${compKb} KB) ✓`
+      );
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch {
       alert('Error procesando imagen');
@@ -104,8 +200,15 @@ export default function CompanySettingsPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (rncValid === false) {
+      setRncError(rncError || 'Corrige el RNC antes de guardar los cambios.');
+      return;
+    }
     setSaving(true);
-    await updateTenant(form);
+    await updateTenant({
+      ...form,
+      rnc: form.rnc.replace(/\D/g, ''),
+    });
     setSaving(false);
     setSuccessMsg('Datos de la empresa actualizados correctamente ✓');
     setTimeout(() => setSuccessMsg(null), 3500);
@@ -178,13 +281,41 @@ export default function CompanySettingsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-slate-700 font-semibold mb-1">RNC Empresa (9 u 11 dígitos)</label>
-            <input
-              type="text"
-              required
-              value={form.rnc}
-              onChange={(e) => setForm({ ...form, rnc: e.target.value })}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-mono font-bold"
-            />
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                required
+                value={form.rnc}
+                onChange={(e) => setForm({ ...form, rnc: e.target.value })}
+                className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-mono font-bold"
+              />
+              <button
+                type="button"
+                disabled={rncLookingUp}
+                onClick={() => runRncLookup(form.rnc, true)}
+                className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center gap-1 shrink-0 transition cursor-pointer"
+                title="Validar y autocompletar nombre desde padrón DGII"
+              >
+                {rncLookingUp ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Search className="w-3.5 h-3.5" />
+                )}
+                <span>Validar DGII</span>
+              </button>
+            </div>
+            {rncStatus && !rncLookingUp && (
+              <p className="text-[11px] text-emerald-700 mt-1 flex items-center gap-1 font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>{rncStatus}</span>
+              </p>
+            )}
+            {rncError && !rncLookingUp && (
+              <p className="text-[11px] text-rose-600 mt-1 flex items-center gap-1 font-semibold">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{rncError}</span>
+              </p>
+            )}
           </div>
 
           <div>
@@ -242,7 +373,7 @@ export default function CompanySettingsPage() {
         <div className="pt-3 border-t border-slate-200 flex justify-end">
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || rncValid === false}
             className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
           >
             <Save className="w-4 h-4" />

@@ -9,6 +9,7 @@ import {
   Camera,
   UploadCloud,
   FileSpreadsheet,
+  Download,
   CheckCircle2,
   Search,
   Receipt,
@@ -915,6 +916,21 @@ function PurchasesContent() {
     }
   };
 
+  const handleExport606Excel = async () => {
+    try {
+      setExporting(true);
+      const currentPeriod = new Date().toISOString().slice(0, 7).replace('-', '');
+      await apiDownload(
+        `/v1/dgii/reports/${currentPeriod}/excel`,
+        `Formato_606_DGII_${currentPeriod}.xls`
+      );
+    } catch (err: any) {
+      alert(err?.message || 'No se pudo descargar el Excel oficial Formato 606.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const filteredPurchases = purchases.filter((p) => {
     const matchesSearch =
       p.rncEmisor.toLowerCase().includes(search.toLowerCase()) ||
@@ -990,10 +1006,20 @@ function PurchasesContent() {
           <button
             type="button"
             disabled={exporting}
-            onClick={handleExport606}
+            onClick={handleExport606Excel}
             className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-sm transition-all cursor-pointer disabled:opacity-50"
           >
             <FileSpreadsheet className="w-4 h-4" />
+            {exporting ? 'Descargando...' : 'Excel 606 Oficial'}
+          </button>
+
+          <button
+            type="button"
+            disabled={exporting}
+            onClick={handleExport606}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm shadow-sm transition-all cursor-pointer disabled:opacity-50"
+          >
+            <Download className="w-4 h-4 text-emerald-400" />
             {exporting ? 'Descargando...' : 'Exportar TXT 606'}
           </button>
         </div>

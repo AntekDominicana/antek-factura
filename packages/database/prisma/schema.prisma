@@ -479,10 +479,11 @@ model FiscalEventLog {
 model ApiKey {
   id                String            @id @default(uuid())
   tenantId          String
+  createdByUserId   String?           @map("user_id")
   name              String
-  keyPrefix         String            // primeros 12 caracteres (ej. 'ak_live_3f9a')
-  keyHash           String            @unique // SHA-256 de la API Key completa
-  encryptedKeyVault String?           // AES-256-GCM cifrado (nunca expuesto en respuestas)
+  keyPrefix         String            // primeros 12 caracteres visibles (ej. 'sk_live_3f9a')
+  keyHash           String            @unique // HMAC-SHA256(API_KEY_PEPPER, rawKey) — nunca texto plano
+  encryptedKeyVault String?           // Deprecated: nunca guardar API keys en texto plano ni reversibles
   scopes            String[]          @default(["invoices:write", "invoices:read"])
   environment       SystemEnvironment @default(SANDBOX)
   isActive          Boolean           @default(true)
@@ -494,6 +495,8 @@ model ApiKey {
   tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+  @@index([keyPrefix])
+  @@index([createdByUserId])
 }
 
 model PaymentLinkTransaction {

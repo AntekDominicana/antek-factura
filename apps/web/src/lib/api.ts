@@ -250,3 +250,64 @@ export function formatClientCode(id?: string | null): string {
   const clean = String(id).replace(/[^a-zA-Z0-9]/g, '');
   return `CLI-${clean.slice(0, 8).toUpperCase()}`;
 }
+
+export interface RncClientLookupResponse {
+  ok: boolean;
+  status: number;
+  data?: {
+    rnc: string;
+    razonSocial: string;
+    nombreRazonSocial?: string;
+    nombreComercial?: string;
+    estado?: string;
+    tipo?: string;
+    regimen?: string;
+    actividadEconomica?: string;
+    checksumValid?: boolean;
+    foundInPadron?: boolean;
+    source?: string;
+  };
+  error?: string;
+}
+
+export async function lookupRncClient(rawRnc: string): Promise<RncClientLookupResponse> {
+  const clean = String(rawRnc || '').replace(/\D/g, '');
+  if (clean.length !== 9 && clean.length !== 11) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'El RNC debe tener 9 dígitos o la Cédula 11 dígitos numéricos.',
+    };
+  }
+
+  const path = `/v1/rnc/lookup?rnc=${encodeURIComponent(clean)}`;
+  try {
+    let res = await fetch(path, { cache: 'no-store' });
+    if (res.status === 404 || res.status >= 502) {
+      // Intentar fallback si el proxy aún no resuelve la ruta
+      const directRes = await fetch(`${API_BASE_URL}${path}`, { cache: 'no-store' }).catch(
+        () => null
+      );
+      if (directRes) res = directRes;
+    }
+
+    const json = await res.json().catch(() => null);
+    if (res.ok && json?.razonSocial) {
+      return { ok: true, status: res.status, data: json };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error:
+        json?.message ||
+        json?.error ||
+        `El RNC/Cédula ${clean} no tiene un dígito verificador válido ante la DGII.`,
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      error: 'No se pudo consultar el padrón DGII en este momento.',
+    };
+  }
+}

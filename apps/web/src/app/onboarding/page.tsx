@@ -4,17 +4,23 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
-import { apiFetch } from '../../lib/api';
+import { apiFetch, lookupRncClient } from '../../lib/api';
 import {
   Upload,
   ArrowRight,
   CheckCircle2,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [rncLookingUp, setRncLookingUp] = useState(false);
+  const [rncStatus, setRncStatus] = useState<string | null>(null);
+  const [rncError, setRncError] = useState<string | null>(null);
+  const [rncValid, setRncValid] = useState<boolean | null>(null);
 
   const [form, setForm] = useState({
     rnc: '',
@@ -45,6 +51,7 @@ export default function OnboardingPage() {
             ...prev,
             rnc: parsed.rnc || parsedUser?.rnc || prev.rnc,
             razonSocial: parsed.razonSocial || parsedUser?.tenantName || prev.razonSocial,
+            nombreComercial: parsed.nombreComercial || parsed.razonSocial || prev.nombreComercial,
             plan: parsed.plan || prev.plan,
           }));
         } catch {}
@@ -53,6 +60,7 @@ export default function OnboardingPage() {
           ...prev,
           rnc: parsedUser.rnc || '',
           razonSocial: parsedUser.tenantName || '',
+          nombreComercial: parsedUser.tenantName || '',
           direccion: parsedUser.direccion || '',
           telefono: parsedUser.telefono || '',
           plan: parsedUser.plan || 'MEDIUM',
@@ -60,6 +68,57 @@ export default function OnboardingPage() {
       }
     }
   }, []);
+
+  // Validación y autocompletado DGII en vivo para RNC / Cédula
+  useEffect(() => {
+    const clean = form.rnc.replace(/\D/g, '');
+    if (clean.length !== 9 && clean.length !== 11) {
+      setRncStatus(null);
+      setRncError(null);
+      setRncValid(null);
+      setRncLookingUp(false);
+      return;
+    }
+
+    let cancelled = false;
+    setRncLookingUp(true);
+    setRncStatus(null);
+    setRncError(null);
+
+    const timer = setTimeout(async () => {
+      const res = await lookupRncClient(clean);
+      if (cancelled) return;
+      setRncLookingUp(false);
+
+      if (!res.ok || !res.data) {
+        setRncValid(false);
+        setRncError(res.error || 'El RNC/Cédula no supera la validación DGII.');
+        return;
+      }
+
+      const data = res.data;
+      setRncValid(true);
+      const isGeneric =
+        data.foundInPadron === false ||
+        /^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(data.razonSocial);
+
+      if (!isGeneric && data.razonSocial) {
+        setForm((prev) => ({
+          ...prev,
+          razonSocial: data.razonSocial,
+          nombreComercial: data.nombreComercial || prev.nombreComercial || data.razonSocial,
+        }));
+        setRncStatus(`DGII (${data.estado || 'ACTIVO'}): ${data.razonSocial}`);
+      } else {
+        setRncStatus('Dígito verificador válido · Verifica o ingresa tu Razón Social');
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [form.rnc]);
 
   const handleLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -168,6 +227,23 @@ export default function OnboardingPage() {
                     placeholder="9 u 11 dígitos numéricos"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
                   />
+                  {rncLookingUp && (
+                    <p className="text-[11px] text-sky-400 mt-1 flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Consultando DGII...
+                    </p>
+                  )}
+                  {rncStatus && !rncLookingUp && (
+                    <p className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                      <span>{rncStatus}</span>
+                    </p>
+                  )}
+                  {rncError && !rncLookingUp && (
+                    <p className="text-[11px] text-rose-400 mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      <span>{rncError}</span>
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Razón Social</label>
@@ -179,7 +255,17 @@ export default function OnboardingPage() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <div className="sm:col-span-2">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Nombre Comercial</label>
+                  <input
+                    type="text"
+                    value={form.nombreComercial}
+                    onChange={(e) => setForm({ ...form, nombreComercial: e.target.value })}
+                    placeholder="Nombre comercial (opcional)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
                   <label className="block text-slate-300 font-semibold mb-1">Dirección Comercial</label>
                   <input
                     type="text"
@@ -194,8 +280,9 @@ export default function OnboardingPage() {
               <div className="pt-4 flex justify-end">
                 <button
                   type="button"
+                  disabled={rncValid === false || !form.rnc.trim() || !form.razonSocial.trim()}
                   onClick={() => setStep(2)}
-                  className="px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+                  className="px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
                 >
                   Siguiente: Conexión Fiscal <ArrowRight className="w-4 h-4" />
                 </button>

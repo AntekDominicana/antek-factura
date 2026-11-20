@@ -88,7 +88,7 @@ export default function ReportsPage() {
       if (kind === 'excel') {
         await apiDownload(
           `/v1/dgii/reports/${periodCompact}/excel`,
-          `Libro_Contable_DGII_${periodCompact}.xls`
+          `Formato_606_DGII_${periodCompact}.xls`
         );
       } else {
         await apiDownload(
@@ -148,7 +148,7 @@ export default function ReportsPage() {
             className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/20 inline-flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
           >
             <Download className="w-4 h-4" />
-            <span>{downloading === 'excel' ? 'Descargando...' : 'Descargar Excel Oficial'}</span>
+            <span>{downloading === 'excel' ? 'Descargando...' : 'Descargar Excel 606 Oficial'}</span>
           </button>
 
           <button

@@ -1627,13 +1627,15 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       return { environment: this.tenant.environment };
     }
 
-    const keyHashBuf = Buffer.from(this.cryptoService.hashSha256(apiKeyRaw), 'hex');
+    const hmacHash = this.cryptoService.hashApiKey(apiKeyRaw);
+    const legacyHash = this.cryptoService.hashSha256(apiKeyRaw);
     const scopedKeys = this.enforceRlsScope(this.apiKeys);
     const keyRecord = scopedKeys.find((k) => {
       if (!k.isActive || !k.keyHash) return false;
-      const storedBuf = Buffer.from(k.keyHash, 'hex');
-      if (storedBuf.length !== keyHashBuf.length) return false;
-      return crypto.timingSafeEqual(storedBuf, keyHashBuf);
+      return (
+        this.cryptoService.verifyHashTimingSafe(hmacHash, k.keyHash) ||
+        this.cryptoService.verifyHashTimingSafe(legacyHash, k.keyHash)
+      );
     });
     if (!keyRecord) {
       throw new HttpException(
@@ -2762,8 +2764,8 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       tenantId: this.tenant.id,
       name: name || `API Key ${dgiiEnv}`,
       keyPrefix: rawKey.substring(0, 12),
-      keyHash: this.cryptoService.hashSha256(rawKey),
-      encryptedKeyVault: this.cryptoService.encrypt(rawKey),
+      keyHash: this.cryptoService.hashApiKey(rawKey),
+      encryptedKeyVault: null,
       sampleSecretDisplay: maskedDisplay,
       environment: mappedEnv,
       dgiiEnvironment: dgiiEnv,
@@ -2893,46 +2895,73 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       const montoTotal = Number(p.montoTotal || 0);
       const itbis = Number(p.totalItbis || 0);
       const neto = Math.max(0, Number((montoTotal - itbis).toFixed(2)));
+      const tipoGasto = String(p.tipoGasto606 || '02').padStart(2, '0');
+      const isBienes = tipoGasto === '09' || tipoGasto === '10';
       return {
-        rncProveedor: p.rncEmisor,
+        rncProveedor: String(p.rncEmisor || '').replace(/\D/g, ''),
         nombreProveedor: p.razonSocialEmisor || `RNC ${p.rncEmisor}`,
         rncComprador: this.tenant.rnc || '',
         razonSocialComprador: this.tenant.razonSocial || '',
-        tipoId: String(p.rncEmisor || '').length === 9 ? 1 : 2,
-        tipoGasto606: p.tipoGasto606 || '02',
+        tipoId: String(p.rncEmisor || '').replace(/\D/g, '').length === 9 ? 1 : 2,
+        tipoGasto606: tipoGasto,
         ncf: p.encf,
+        ncfModificado: '',
         fechaComprobante: p.fechaEmision || '',
-        montoServicios: neto,
-        montoBienes: 0,
+        fechaPago: '',
+        montoServicios: isBienes ? 0 : neto,
+        montoBienes: isBienes ? neto : 0,
         montoFacturado: neto,
         itbisFacturado: itbis,
         itbisRetenido: 0,
-        itbisPorAdelantar: itbis,
+        itbisSujetoProporcionalidad: 0,
         itbisLlevadoAlCosto: 0,
+        itbisPorAdelantar: itbis,
+        itbisPercibido: 0,
         tipoRetencionIsr: '',
         isrRetenido: 0,
+        isrPercibido: 0,
+        isc: 0,
+        otrosImpuestos: 0,
+        propinaLegal: 0,
         formaPago: 1,
         estadoDgii: p.commercialStatus || 'Aceptado',
       };
     }
+    const tipoGasto = String(p.tipoGasto606 || '02').padStart(2, '0');
+    const isBienes = tipoGasto === '09' || tipoGasto === '10';
+    const montoFacturado = Number(p.montoFacturado || 0);
+    let montoServicios = Number(p.montoServicios || 0);
+    let montoBienes = Number(p.montoBienes || 0);
+    if (montoServicios === 0 && montoBienes === 0 && montoFacturado > 0) {
+      montoServicios = isBienes ? 0 : montoFacturado;
+      montoBienes = isBienes ? montoFacturado : 0;
+    }
     return {
-      rncProveedor: p.rncProveedor || '',
+      rncProveedor: String(p.rncProveedor || '').replace(/\D/g, ''),
       nombreProveedor: p.nombreProveedor || '',
       rncComprador: p.rncComprador || this.tenant.rnc || '',
       razonSocialComprador: p.razonSocialComprador || this.tenant.razonSocial || '',
-      tipoId: p.tipoId || 1,
-      tipoGasto606: p.tipoGasto606 || '02',
+      tipoId: p.tipoId || (String(p.rncProveedor || '').replace(/\D/g, '').length === 9 ? 1 : 2),
+      tipoGasto606: tipoGasto,
       ncf: p.ncf || '',
+      ncfModificado: p.ncfModificado || '',
       fechaComprobante: p.fechaComprobante || '',
-      montoServicios: Number(p.montoServicios || 0),
-      montoBienes: Number(p.montoBienes || 0),
-      montoFacturado: Number(p.montoFacturado || 0),
+      fechaPago: p.fechaPago || '',
+      montoServicios,
+      montoBienes,
+      montoFacturado,
       itbisFacturado: Number(p.itbisFacturado || 0),
       itbisRetenido: Number(p.itbisRetenido || 0),
-      itbisPorAdelantar: Number(p.itbisPorAdelantar ?? p.itbisFacturado ?? 0),
+      itbisSujetoProporcionalidad: Number(p.itbisSujetoProporcionalidad || 0),
       itbisLlevadoAlCosto: Number(p.itbisLlevadoAlCosto || 0),
+      itbisPorAdelantar: Number(p.itbisPorAdelantar ?? p.itbisFacturado ?? 0),
+      itbisPercibido: Number(p.itbisPercibido || 0),
       tipoRetencionIsr: p.tipoRetencionIsr || '',
       isrRetenido: Number(p.isrRetenido || 0),
+      isrPercibido: Number(p.isrPercibido || 0),
+      isc: Number(p.isc || 0),
+      otrosImpuestos: Number(p.otrosImpuestos || 0),
+      propinaLegal: Number(p.propinaLegal || 0),
       formaPago: p.formaPago || 1,
       estadoDgii: p.estadoDgii || 'Aceptado',
     };
@@ -3018,10 +3047,17 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     const voidedInvoices = scopedInvoices.filter((i) => i.status === 'REJECTED');
 
     const toDgiiDate = (dateStr: string) => {
-      if (dateStr.includes('-')) {
-        const parts = dateStr.split('-');
-        if (parts[0].length === 4) return `${parts[0]}${parts[1]}${parts[2]}`;
-        if (parts[2].length === 4) return `${parts[2]}${parts[1]}${parts[0]}`;
+      const clean = String(dateStr || '').trim();
+      if (/^\d{8}$/.test(clean)) return clean;
+      if (clean.includes('-')) {
+        const parts = clean.split('-');
+        if (parts[0]?.length === 4) return `${parts[0]}${parts[1]}${parts[2]}`;
+        if (parts[2]?.length === 4) return `${parts[2]}${parts[1]}${parts[0]}`;
+      }
+      if (clean.includes('/')) {
+        const parts = clean.split('/');
+        if (parts[0]?.length === 4) return `${parts[0]}${parts[1]}${parts[2]}`;
+        if (parts[2]?.length === 4) return `${parts[2]}${parts[1]}${parts[0]}`;
       }
       return `${period}16`;
     };
@@ -3050,51 +3086,141 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     });
 
     // 2. Formato 606 (Compras: combina recibidas de suplidores + e-CF 41/43 emitidos)
-    const rows606FromReceived = scopedReceived.map((pur) => ({
-      rncCedula: pur.rncProveedor,
-      nombre: pur.nombreProveedor,
-      tipoId: pur.tipoId,
-      tipoGasto: pur.tipoGasto606,
-      ncf: pur.ncf,
-      fechaComprobante: toDgiiDate(pur.fechaComprobante),
-      montoServicios: pur.montoServicios.toFixed(2),
-      montoBienes: pur.montoBienes.toFixed(2),
-      montoFacturado: pur.montoFacturado.toFixed(2),
-      itbisFacturado: pur.itbisFacturado.toFixed(2),
-      itbisRetenido: pur.itbisRetenido.toFixed(2),
-      itbisPorAdelantar: pur.itbisPorAdelantar.toFixed(2),
-      itbisLlevadoAlCosto: pur.itbisLlevadoAlCosto.toFixed(2),
-      tipoRetencionIsr: pur.tipoRetencionIsr || '',
-      isrRetenido: pur.isrRetenido.toFixed(2),
-      lineTxt: `${pur.rncProveedor}|${pur.tipoId}|${pur.tipoGasto606}|${pur.ncf}||${toDgiiDate(pur.fechaComprobante)}||${pur.montoServicios.toFixed(2)}|${pur.montoBienes.toFixed(2)}|${pur.montoFacturado.toFixed(2)}|${pur.itbisFacturado.toFixed(2)}|${pur.itbisRetenido.toFixed(2)}|0.00|${pur.itbisLlevadoAlCosto.toFixed(2)}|${pur.itbisPorAdelantar.toFixed(2)}|0.00|${pur.tipoRetencionIsr || ''}|${pur.isrRetenido.toFixed(2)}|0.00|0.00|0.00|0.00|${pur.formaPago}`,
-    }));
+    const rows606FromReceived = scopedReceived.map((pur) => {
+      const fechaComp = toDgiiDate(pur.fechaComprobante);
+      const hasRet = pur.itbisRetenido > 0 || pur.isrRetenido > 0;
+      const fechaPago = hasRet ? toDgiiDate(pur.fechaPago || pur.fechaComprobante) : '';
+      const formaPagoCode = String(pur.formaPago || 1).padStart(2, '0');
+      const itbisAdelantar = Math.max(
+        0,
+        Number((pur.itbisPorAdelantar ?? pur.itbisFacturado - pur.itbisLlevadoAlCosto).toFixed(2))
+      );
+      return {
+        rncCedula: pur.rncProveedor,
+        nombre: pur.nombreProveedor,
+        tipoId: pur.tipoId,
+        tipoGasto: pur.tipoGasto606,
+        ncf: pur.ncf,
+        ncfModificado: pur.ncfModificado || '',
+        fechaComprobante: fechaComp,
+        fechaPago,
+        montoServicios: pur.montoServicios.toFixed(2),
+        montoBienes: pur.montoBienes.toFixed(2),
+        montoFacturado: pur.montoFacturado.toFixed(2),
+        itbisFacturado: pur.itbisFacturado.toFixed(2),
+        itbisRetenido: pur.itbisRetenido.toFixed(2),
+        itbisProporcionalidad: (pur.itbisSujetoProporcionalidad || 0).toFixed(2),
+        itbisLlevadoAlCosto: pur.itbisLlevadoAlCosto.toFixed(2),
+        itbisPorAdelantar: itbisAdelantar.toFixed(2),
+        itbisPercibido: (pur.itbisPercibido || 0).toFixed(2),
+        tipoRetencionIsr: pur.tipoRetencionIsr || '',
+        isrRetenido: pur.isrRetenido.toFixed(2),
+        isrPercibido: (pur.isrPercibido || 0).toFixed(2),
+        isc: (pur.isc || 0).toFixed(2),
+        otrosImpuestos: (pur.otrosImpuestos || 0).toFixed(2),
+        propinaLegal: (pur.propinaLegal || 0).toFixed(2),
+        formaPago: Number(pur.formaPago || 1),
+        formaPagoCode,
+        estadoDgii: pur.estadoDgii || 'Válido',
+        lineTxt: [
+          pur.rncProveedor,
+          pur.tipoId,
+          pur.tipoGasto606,
+          pur.ncf,
+          pur.ncfModificado || '',
+          fechaComp,
+          fechaPago,
+          pur.montoServicios.toFixed(2),
+          pur.montoBienes.toFixed(2),
+          pur.montoFacturado.toFixed(2),
+          pur.itbisFacturado.toFixed(2),
+          pur.itbisRetenido.toFixed(2),
+          (pur.itbisSujetoProporcionalidad || 0).toFixed(2),
+          pur.itbisLlevadoAlCosto.toFixed(2),
+          itbisAdelantar.toFixed(2),
+          (pur.itbisPercibido || 0).toFixed(2),
+          pur.tipoRetencionIsr || '',
+          pur.isrRetenido.toFixed(2),
+          (pur.isrPercibido || 0).toFixed(2),
+          (pur.isc || 0).toFixed(2),
+          (pur.otrosImpuestos || 0).toFixed(2),
+          (pur.propinaLegal || 0).toFixed(2),
+          formaPagoCode,
+        ].join('|'),
+      };
+    });
 
     const rows606FromEmitted = emittedPurchaseEcfs.map((inv) => {
       const rnc = inv.rncComprador || rncEmisor;
       const tipoId = rnc.length === 9 ? 1 : 2;
-      const montoFacturado = Number(
+      const tipoGasto: string = inv.tipoEcf === 43 ? '02' : '09';
+      const montoFacturadoNum = Number(
         (inv.totales?.montoGravadoTotal || 0) + (inv.totales?.montoExento || 0)
-      ).toFixed(2);
+      );
+      const montoFacturado = montoFacturadoNum.toFixed(2);
+      const isBienes = tipoGasto === '09' || tipoGasto === '10';
+      const montoServicios = isBienes ? '0.00' : montoFacturado;
+      const montoBienes = isBienes ? montoFacturado : '0.00';
       const itbisFacturado = Number(inv.totales?.totalItbis || 0).toFixed(2);
       const itbisRet = Number(inv.totales?.totalItbisRetenido || 0).toFixed(2);
       const isrRet = Number(inv.totales?.totalIsrRetencion || 0).toFixed(2);
+      const hasRet = Number(itbisRet) > 0 || Number(isrRet) > 0;
+      const fechaComp = toDgiiDate(inv.fechaEmision);
+      const fechaPago = hasRet ? fechaComp : '';
+      const tipoRetIsr = Number(isrRet) > 0 ? '02' : '';
+      const formaPagoCode = String(inv.formaPago || 1).padStart(2, '0');
       return {
         rncCedula: rnc,
         nombre: inv.razonSocialComprador || 'Gasto / Compra Directa',
         tipoId,
-        tipoGasto: inv.tipoEcf === 43 ? '02' : '09',
+        tipoGasto,
         ncf: inv.encf,
-        fechaComprobante: toDgiiDate(inv.fechaEmision),
-        montoServicios: '0.00',
-        montoBienes: montoFacturado,
+        ncfModificado: '',
+        fechaComprobante: fechaComp,
+        fechaPago,
+        montoServicios,
+        montoBienes,
         montoFacturado,
         itbisFacturado,
         itbisRetenido: itbisRet,
-        itbisPorAdelantar: itbisFacturado,
+        itbisProporcionalidad: '0.00',
         itbisLlevadoAlCosto: '0.00',
-        tipoRetencionIsr: Number(isrRet) > 0 ? '02' : '',
+        itbisPorAdelantar: itbisFacturado,
+        itbisPercibido: '0.00',
+        tipoRetencionIsr: tipoRetIsr,
         isrRetenido: isrRet,
-        lineTxt: `${rnc}|${tipoId}|${inv.tipoEcf === 43 ? '02' : '09'}|${inv.encf}||${toDgiiDate(inv.fechaEmision)}||0.00|${montoFacturado}|${montoFacturado}|${itbisFacturado}|${itbisRet}|0.00|0.00|${itbisFacturado}|0.00||${isrRet}|0.00|0.00|0.00|0.00|${inv.formaPago || 1}`,
+        isrPercibido: '0.00',
+        isc: '0.00',
+        otrosImpuestos: '0.00',
+        propinaLegal: '0.00',
+        formaPago: Number(inv.formaPago || 1),
+        formaPagoCode,
+        estadoDgii: inv.status === 'ACCEPTED' ? 'Válido' : String(inv.status || 'Válido'),
+        lineTxt: [
+          rnc,
+          tipoId,
+          tipoGasto,
+          inv.encf,
+          '',
+          fechaComp,
+          fechaPago,
+          montoServicios,
+          montoBienes,
+          montoFacturado,
+          itbisFacturado,
+          itbisRet,
+          '0.00',
+          '0.00',
+          itbisFacturado,
+          '0.00',
+          tipoRetIsr,
+          isrRet,
+          '0.00',
+          '0.00',
+          '0.00',
+          '0.00',
+          formaPagoCode,
+        ].join('|'),
       };
     });
 
@@ -3191,10 +3317,12 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Genera un libro Excel (.xls SpreadsheetML) multi-hoja para el Contable (CPA):
-   * - Hoja 1: Compras_606
-   * - Hoja 2: Ventas_607
-   * - Hoja 3: Resumen_IT1_IR17
+   * Genera el Libro Excel Oficial DGII (.xls SpreadsheetML) conforme a Norma General 07-2018 y 05-2019 (Versión 2025):
+   * - Hoja 1: Formato 606 (23 columnas oficiales + Fecha Comprobante/Pago AAAAMM + DD y fórmulas Excel)
+   * - Hoja 2: Detalle_Suplidores_606 (control contable con Razón Social del Emisor)
+   * - Hoja 3: Ventas_607
+   * - Hoja 4: Resumen_IT1_IR17
+   * - Hoja 5: Catalogos_DGII_606
    */
   public async generateAccountantExcelReport(
     period: string,
@@ -3202,17 +3330,45 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ filename: string; xmlWorkbook: string }> {
     const reports = await this.generateDgiiReports(period, tenantId);
     const effectiveTenantId = tenantId || this.tenant.id;
-    let rawPurchases: any[] = this.enforceRlsScope(this.receivedPurchases, effectiveTenantId);
-    try {
-      const dbPur = await prisma.receivedPurchase.findMany({
-        where: { tenantId: effectiveTenantId },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (dbPur.length > 0) rawPurchases = dbPur;
-    } catch {}
-    const scopedPurchases = rawPurchases.map((p) => this.normalizeReceivedPurchase(p));
     const allInvoices = await this.getInvoices({}, effectiveTenantId);
     const scopedSales = allInvoices.filter((i: any) => i.status !== 'REJECTED');
+
+    const rows606 = reports.formato606.rows;
+
+    const OFFICIAL_TIPO_GASTO_606: Record<string, string> = {
+      '01': '01-GASTOS DE PERSONAL',
+      '02': '02-GASTOS POR TRABAJOS, SUMINISTROS Y SERVICIOS',
+      '03': '03-ARRENDAMIENTOS',
+      '04': '04-GASTOS DE ACTIVOS FIJOS',
+      '05': '05 -GASTOS DE REPRESENTACIÓN',
+      '06': '06-OTRAS DEDUCCIONES ADMITIDAS',
+      '07': '07-GASTOS FINANCIEROS',
+      '08': '08-GASTOS EXTRAORDINARIOS',
+      '09': '09-COMPRAS Y GASTOS QUE FORMAN PARTE DEL COSTO DE VENTA',
+      '10': '10-ADQUISICIONES DE ACTIVOS',
+      '11': '11- GASTOS DE SEGUROS',
+    };
+
+    const OFFICIAL_FORMA_PAGO_606: Record<string, string> = {
+      '01': '01 - EFECTIVO',
+      '02': '02 - CHEQUES/TRANSFERENCIAS/DEPÓSITO',
+      '03': '03 - TARJETA CRÉDITO/DÉBITO',
+      '04': '04 - COMPRA A CREDITO',
+      '05': '05 - PERMUTA',
+      '06': '06 - NOTA DE CREDITO',
+      '07': '07 - MIXTO',
+    };
+
+    const OFFICIAL_TIPO_RETENCION_ISR: Record<string, string> = {
+      '01': '01 - ALQUILERES',
+      '02': '02 - HONORARIOS POR SERVICIOS',
+      '03': '03 - OTRAS RENTAS',
+      '04': '04 - OTRAS RENTAS (Rentas Presuntas)',
+      '05': '05 - INTERESES PAGADOS A PERSONAS JURIDICAS',
+      '06': '06 - INTERESES PAGADOS A PERSONAS FISICAS',
+      '07': '07 - RETENCION POR PROVEEDORES DEL ESTADO',
+      '08': '08 - JUEGOS TELEFONICOS',
+    };
 
     const esc = (val: unknown) =>
       String(val ?? '')
@@ -3221,57 +3377,133 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 
-    const cellStr = (val: unknown, style = 'Default') =>
-      `<Cell ss:StyleID="${style}"><Data ss:Type="String">${esc(val)}</Data></Cell>`;
-    const cellNum = (val: unknown, style = 'Num') =>
-      `<Cell ss:StyleID="${style}"><Data ss:Type="Number">${Number(val || 0).toFixed(2)}</Data></Cell>`;
+    const cellStr = (val: unknown, style = 'Default', attrs = '') =>
+      `<Cell ss:StyleID="${style}"${attrs ? ' ' + attrs : ''}><Data ss:Type="String">${esc(val)}</Data></Cell>`;
+    const cellInt = (val: unknown, style = 'CellInt', attrs = '') =>
+      `<Cell ss:StyleID="${style}"${attrs ? ' ' + attrs : ''}><Data ss:Type="Number">${Math.round(Number(val || 0))}</Data></Cell>`;
+    const cellNum = (val: unknown, style = 'Num', attrs = '') =>
+      `<Cell ss:StyleID="${style}"${attrs ? ' ' + attrs : ''}><Data ss:Type="Number">${Number(val || 0).toFixed(2)}</Data></Cell>`;
+    const cellSum = (sumVal: number, count: number, style = 'TotalNum') =>
+      count > 0
+        ? `<Cell ss:StyleID="${style}" ss:Formula="=SUM(R[-${count}]C:R[-1]C)"><Data ss:Type="Number">${sumVal.toFixed(2)}</Data></Cell>`
+        : cellNum(0, style);
 
-    const purchaseRowsXml = scopedPurchases
-      .map((p) => {
-        const total = Number((p.montoFacturado + p.itbisFacturado).toFixed(2));
-        return `<Row>
-          ${cellStr(p.rncProveedor)}
-          ${cellStr(p.nombreProveedor)}
-          ${cellStr(p.rncComprador || this.tenant.rnc || '')}
-          ${cellStr(p.razonSocialComprador || this.tenant.razonSocial || '')}
-          ${cellStr(p.ncf)}
-          ${cellStr(p.fechaComprobante)}
-          ${cellStr(p.tipoGasto606)}
-          ${cellNum(p.montoFacturado)}
-          ${cellNum(p.itbisFacturado)}
-          ${cellNum(p.itbisPorAdelantar)}
-          ${cellNum(p.itbisRetenido)}
-          ${cellNum(p.isrRetenido)}
-          ${cellNum(total)}
-          ${cellStr(p.estadoDgii || 'Aceptado')}
+    const official606RowsXml = rows606
+      .map((r: any, idx: number) => {
+        const tipoCode = String(r.tipoGasto || '02').padStart(2, '0');
+        const tipoLabel = OFFICIAL_TIPO_GASTO_606[tipoCode] || OFFICIAL_TIPO_GASTO_606['02'];
+        const pagoCode = String(r.formaPagoCode || r.formaPago || '01').padStart(2, '0');
+        const pagoLabel = OFFICIAL_FORMA_PAGO_606[pagoCode] || OFFICIAL_FORMA_PAGO_606['01'];
+        const retCode = String(r.tipoRetencionIsr || '').trim();
+        const retLabel = retCode ? OFFICIAL_TIPO_RETENCION_ISR[retCode.padStart(2, '0')] || retCode : '';
+
+        const fc = String(r.fechaComprobante || '').replace(/\D/g, '');
+        const fcYm = fc.length >= 6 ? fc.slice(0, 6) : period;
+        const fcDay = fc.length >= 8 ? fc.slice(6, 8) : '';
+
+        const fp = String(r.fechaPago || '').replace(/\D/g, '');
+        const fpYm = fp.length >= 6 ? fp.slice(0, 6) : '';
+        const fpDay = fp.length >= 8 ? fp.slice(6, 8) : '';
+
+        const rowStyle = idx % 2 === 1 ? 'CellTextAlt' : 'CellText';
+        const intStyle = idx % 2 === 1 ? 'CellIntAlt' : 'CellInt';
+        const numStyle = idx % 2 === 1 ? 'NumAlt' : 'Num';
+        const calcStyle = idx % 2 === 1 ? 'NumCalcAlt' : 'NumCalc';
+
+        return `<Row ss:Height="19">
+          ${cellInt(idx + 1, intStyle)}
+          ${cellStr(r.rncCedula, rowStyle)}
+          ${cellInt(r.tipoId, intStyle)}
+          ${cellStr(tipoLabel, rowStyle)}
+          ${cellStr(r.ncf, rowStyle)}
+          ${cellStr(r.ncfModificado || '', rowStyle)}
+          ${cellStr(fcYm, intStyle)}
+          ${cellStr(fcDay, intStyle)}
+          ${cellStr(fpYm, intStyle)}
+          ${cellStr(fpDay, intStyle)}
+          ${cellNum(r.montoServicios, numStyle)}
+          ${cellNum(r.montoBienes, numStyle)}
+          <Cell ss:StyleID="${calcStyle}" ss:Formula="=RC[-2]+RC[-1]"><Data ss:Type="Number">${Number(r.montoFacturado || 0).toFixed(2)}</Data></Cell>
+          ${cellNum(r.itbisFacturado, numStyle)}
+          ${cellNum(r.itbisRetenido, numStyle)}
+          ${cellNum(r.itbisProporcionalidad, numStyle)}
+          ${cellNum(r.itbisLlevadoAlCosto, numStyle)}
+          <Cell ss:StyleID="${calcStyle}" ss:Formula="=RC[-4]-RC[-1]"><Data ss:Type="Number">${Number(r.itbisPorAdelantar || 0).toFixed(2)}</Data></Cell>
+          ${cellNum(r.itbisPercibido, numStyle)}
+          ${cellStr(retLabel, rowStyle)}
+          ${cellNum(r.isrRetenido, numStyle)}
+          ${cellNum(r.isrPercibido, numStyle)}
+          ${cellNum(r.isc, numStyle)}
+          ${cellNum(r.otrosImpuestos, numStyle)}
+          ${cellNum(r.propinaLegal, numStyle)}
+          ${cellStr(pagoLabel, rowStyle)}
+          ${cellStr(r.estadoDgii || 'Válido', intStyle)}
         </Row>`;
       })
       .join('\n');
 
-    const totalNetoCompras = scopedPurchases.reduce((s, p) => s + p.montoFacturado, 0);
-    const totalItbisCompras = scopedPurchases.reduce((s, p) => s + p.itbisFacturado, 0);
-    const totalGeneralCompras = totalNetoCompras + totalItbisCompras;
+    const rowCount606 = rows606.length;
+    const sumServicios = rows606.reduce((s: number, r: any) => s + Number(r.montoServicios || 0), 0);
+    const sumBienes = rows606.reduce((s: number, r: any) => s + Number(r.montoBienes || 0), 0);
+    const sumFacturado = rows606.reduce((s: number, r: any) => s + Number(r.montoFacturado || 0), 0);
+    const sumItbisFact = rows606.reduce((s: number, r: any) => s + Number(r.itbisFacturado || 0), 0);
+    const sumItbisRet = rows606.reduce((s: number, r: any) => s + Number(r.itbisRetenido || 0), 0);
+    const sumItbisProp = rows606.reduce((s: number, r: any) => s + Number(r.itbisProporcionalidad || 0), 0);
+    const sumItbisCosto = rows606.reduce((s: number, r: any) => s + Number(r.itbisLlevadoAlCosto || 0), 0);
+    const sumItbisAdel = rows606.reduce((s: number, r: any) => s + Number(r.itbisPorAdelantar || 0), 0);
+    const sumItbisPerc = rows606.reduce((s: number, r: any) => s + Number(r.itbisPercibido || 0), 0);
+    const sumIsrRet = rows606.reduce((s: number, r: any) => s + Number(r.isrRetenido || 0), 0);
+    const sumIsrPerc = rows606.reduce((s: number, r: any) => s + Number(r.isrPercibido || 0), 0);
+    const sumIsc = rows606.reduce((s: number, r: any) => s + Number(r.isc || 0), 0);
+    const sumOtros = rows606.reduce((s: number, r: any) => s + Number(r.otrosImpuestos || 0), 0);
+    const sumPropina = rows606.reduce((s: number, r: any) => s + Number(r.propinaLegal || 0), 0);
+
+    const supplierDetailRowsXml = rows606
+      .map((r: any, idx: number) => {
+        const tipoCode = String(r.tipoGasto || '02').padStart(2, '0');
+        const total = Number(r.montoFacturado || 0) + Number(r.itbisFacturado || 0);
+        return `<Row ss:Height="18">
+          ${cellInt(idx + 1, 'CellInt')}
+          ${cellStr(r.rncCedula, 'CellText')}
+          ${cellStr(r.nombre, 'CellText')}
+          ${cellStr(r.ncf, 'CellText')}
+          ${cellStr(r.fechaComprobante, 'CellInt')}
+          ${cellStr(OFFICIAL_TIPO_GASTO_606[tipoCode] || tipoCode, 'CellText')}
+          ${cellNum(r.montoFacturado, 'Num')}
+          ${cellNum(r.itbisFacturado, 'Num')}
+          ${cellNum(r.itbisPorAdelantar, 'Num')}
+          ${cellNum(total, 'Num')}
+          ${cellStr(r.estadoDgii || 'Aceptado', 'CellInt')}
+        </Row>`;
+      })
+      .join('\n');
 
     const salesRowsXml = scopedSales
       .map((inv) => {
         const neto = Number(((inv.totales?.montoGravadoTotal || 0) + (inv.totales?.montoExento || 0)).toFixed(2));
         const itbis = Number((inv.totales?.totalItbis || 0).toFixed(2));
         const total = Number((inv.totales?.montoTotal || neto + itbis).toFixed(2));
-        return `<Row>
-          ${cellStr(this.tenant.rnc || '')}
-          ${cellStr(this.tenant.razonSocial || 'EMISOR')}
-          ${cellStr(inv.rncComprador || inv.identificadorExtranjero || '')}
-          ${cellStr(inv.razonSocialComprador || 'Consumidor Final')}
-          ${cellStr(inv.encf)}
-          ${cellStr(inv.fechaEmision)}
-          ${cellStr(`Tipo ${inv.tipoEcf}`)}
-          ${cellNum(neto)}
-          ${cellNum(itbis)}
-          ${cellNum(total)}
-          ${cellStr(inv.status)}
+        return `<Row ss:Height="18">
+          ${cellStr(this.tenant.rnc || '', 'CellText')}
+          ${cellStr(this.tenant.razonSocial || 'EMISOR', 'CellText')}
+          ${cellStr(inv.rncComprador || inv.identificadorExtranjero || '', 'CellText')}
+          ${cellStr(inv.razonSocialComprador || 'Consumidor Final', 'CellText')}
+          ${cellStr(inv.encf, 'CellText')}
+          ${cellStr(inv.fechaEmision, 'CellInt')}
+          ${cellStr(`Tipo ${inv.tipoEcf}`, 'CellInt')}
+          ${cellNum(neto, 'Num')}
+          ${cellNum(itbis, 'Num')}
+          ${cellNum(total, 'Num')}
+          ${cellStr(inv.status, 'CellInt')}
         </Row>`;
       })
       .join('\n');
+
+    const catalogRowsXml = [
+      ...Object.values(OFFICIAL_TIPO_GASTO_606).map((v) => `<Row>${cellStr('Tipo Bienes y Servicios (Col 3)', 'CellText')}${cellStr(v, 'CellText')}</Row>`),
+      ...Object.values(OFFICIAL_FORMA_PAGO_606).map((v) => `<Row>${cellStr('Forma de Pago (Col 23)', 'CellText')}${cellStr(v, 'CellText')}</Row>`),
+      ...Object.values(OFFICIAL_TIPO_RETENCION_ISR).map((v) => `<Row>${cellStr('Tipo Retención ISR (Col 17)', 'CellText')}${cellStr(v, 'CellText')}</Row>`),
+    ].join('\n');
 
     const xmlWorkbook = `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
@@ -3280,51 +3512,220 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   xmlns:x="urn:schemas-microsoft-com:office:excel"
   xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
   <Styles>
-    <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="11"/></Style>
-    <Style ss:ID="Header"><Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1E293B" ss:Pattern="Solid"/></Style>
-    <Style ss:ID="Num"><NumberFormat ss:Format="#,##0.00"/></Style>
-    <Style ss:ID="Total"><Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1"/><Interior ss:Color="#ECFDF5" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/></Style>
+    <Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="10"/></Style>
+    <Style ss:ID="TitleBanner"><Font ss:FontName="Calibri" ss:Size="13" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F6E43" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Left"/></Style>
+    <Style ss:ID="SubtitleBanner"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#D1FAE5"/><Interior ss:Color="#1F6E43" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Right"/></Style>
+    <Style ss:ID="MetaLabel"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#14532D"/><Interior ss:Color="#E8F5E9" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/></Borders></Style>
+    <Style ss:ID="MetaLabelRight"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#14532D"/><Interior ss:Color="#E8F5E9" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Right"/></Style>
+    <Style ss:ID="MetaVal"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#0F172A"/><Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="MetaInput"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#0F172A"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Left"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/></Borders></Style>
+    <Style ss:ID="MetaInputNum"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#0F172A"/><Interior ss:Color="#FFFFFF" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Right"/><NumberFormat ss:Format="#,##0"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/></Borders></Style>
+    <Style ss:ID="HeaderNum"><Font ss:FontName="Calibri" ss:Size="9" ss:Bold="1" ss:Color="#14532D"/><Interior ss:Color="#BBF7D0" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#86EFAC"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#86EFAC"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#86EFAC"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#86EFAC"/></Borders></Style>
+    <Style ss:ID="Header"><Font ss:FontName="Calibri" ss:Size="9" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F6E43" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Center" ss:WrapText="1"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/></Borders></Style>
+    <Style ss:ID="SubHeader"><Font ss:FontName="Calibri" ss:Size="9" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#166534" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Center"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#14532D"/></Borders></Style>
+    <Style ss:ID="CellText"><Font ss:FontName="Calibri" ss:Size="10"/><Alignment ss:Vertical="Center" ss:Horizontal="Left"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="CellTextAlt"><Font ss:FontName="Calibri" ss:Size="10"/><Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Left"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="CellInt"><Font ss:FontName="Calibri" ss:Size="10"/><Alignment ss:Vertical="Center" ss:Horizontal="Center"/><NumberFormat ss:Format="0"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="CellIntAlt"><Font ss:FontName="Calibri" ss:Size="10"/><Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:Horizontal="Center"/><NumberFormat ss:Format="0"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="Num"><Font ss:FontName="Calibri" ss:Size="10"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="NumAlt"><Font ss:FontName="Calibri" ss:Size="10"/><Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/></Borders></Style>
+    <Style ss:ID="NumCalc"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1"/><Interior ss:Color="#F0FDF4" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/></Borders></Style>
+    <Style ss:ID="NumCalcAlt"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1"/><Interior ss:Color="#ECFDF5" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#CBD5E1"/></Borders></Style>
+    <Style ss:ID="TotalLabel"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#14532D"/><Interior ss:Color="#DCFCE7" ss:Pattern="Solid"/><Borders><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#1F6E43"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#1F6E43"/></Borders></Style>
+    <Style ss:ID="TotalNum"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1" ss:Color="#14532D"/><Interior ss:Color="#DCFCE7" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#1F6E43"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#1F6E43"/><Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#A7F3D0"/></Borders></Style>
+    <Style ss:ID="Total"><Font ss:FontName="Calibri" ss:Size="10" ss:Bold="1"/><Interior ss:Color="#ECFDF5" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/></Style>
   </Styles>
-  <Worksheet ss:Name="Compras_606">
+  <Worksheet ss:Name="Formato 606">
     <Table>
-      <Row>
+      <Column ss:Width="52"/>
+      <Column ss:Width="95"/>
+      <Column ss:Width="55"/>
+      <Column ss:Width="260"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="68"/>
+      <Column ss:Width="38"/>
+      <Column ss:Width="68"/>
+      <Column ss:Width="38"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="130"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="185"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="195"/>
+      <Column ss:Width="85"/>
+      <Row ss:Height="28">
+        ${cellStr('Formato de Envío de Compras de Bienes y Servicios (DGII)', 'TitleBanner', 'ss:MergeAcross="5"')}
+        ${cellStr('Norma General 07-2018 y 05-2019 · Herramienta de Distribución Gratuita · Versión 2025', 'SubtitleBanner', 'ss:MergeAcross="20"')}
+      </Row>
+      <Row ss:Height="19">
+        ${cellStr('Razón Social Declarante:', 'MetaLabel', 'ss:MergeAcross="2"')}
+        ${cellStr(this.tenant.razonSocial || 'EMPRESA DECLARANTE', 'MetaVal', 'ss:MergeAcross="7"')}
+        ${cellStr('Generado por:', 'MetaLabelRight', 'ss:MergeAcross="2"')}
+        ${cellStr('ANTEK Factura · Sistema e-CF Ley 32-23', 'MetaVal', 'ss:MergeAcross="12"')}
+      </Row>
+      <Row ss:Height="8"/>
+      <Row ss:Height="19">
+        ${cellStr('RNC o Cédula', 'MetaLabel', 'ss:MergeAcross="2"')}
+        ${cellStr(reports.rnc, 'MetaInput')}
+      </Row>
+      <Row ss:Height="19">
+        ${cellStr('Periodo', 'MetaLabel', 'ss:MergeAcross="2"')}
+        ${cellStr(period, 'MetaInput')}
+      </Row>
+      <Row ss:Height="19">
+        ${cellStr('Cantidad Registros', 'MetaLabel', 'ss:MergeAcross="2"')}
+        ${cellInt(rowCount606, 'MetaInputNum')}
+      </Row>
+      <Row ss:Height="19">
+        ${cellStr('Lineas de Error', 'MetaLabel', 'ss:MergeAcross="2"')}
+        ${cellInt(0, 'MetaInputNum')}
+      </Row>
+      <Row ss:Height="10"/>
+      <Row ss:Height="18">
+        ${cellStr('Líneas', 'HeaderNum')}
+        ${cellStr('1', 'HeaderNum')}
+        ${cellStr('2', 'HeaderNum')}
+        ${cellStr('3', 'HeaderNum')}
+        ${cellStr('4', 'HeaderNum')}
+        ${cellStr('5', 'HeaderNum')}
+        ${cellStr('6', 'HeaderNum', 'ss:MergeAcross="1"')}
+        ${cellStr('7', 'HeaderNum', 'ss:MergeAcross="1"')}
+        ${cellStr('8', 'HeaderNum')}
+        ${cellStr('9', 'HeaderNum')}
+        ${cellStr('10', 'HeaderNum')}
+        ${cellStr('11', 'HeaderNum')}
+        ${cellStr('12', 'HeaderNum')}
+        ${cellStr('13', 'HeaderNum')}
+        ${cellStr('14', 'HeaderNum')}
+        ${cellStr('15', 'HeaderNum')}
+        ${cellStr('16', 'HeaderNum')}
+        ${cellStr('17', 'HeaderNum')}
+        ${cellStr('18', 'HeaderNum')}
+        ${cellStr('19', 'HeaderNum')}
+        ${cellStr('20', 'HeaderNum')}
+        ${cellStr('21', 'HeaderNum')}
+        ${cellStr('22', 'HeaderNum')}
+        ${cellStr('23', 'HeaderNum')}
+        ${cellStr('Estatus', 'HeaderNum')}
+      </Row>
+      <Row ss:Height="34">
+        ${cellStr('Líneas', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('RNC o Cédula', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Tipo Id', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Tipo Bienes y Servicios Comprados', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('NCF', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('NCF ó Documento Modificado', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Fecha Comprobante', 'Header', 'ss:MergeAcross="1"')}
+        ${cellStr('Fecha Pago', 'Header', 'ss:MergeAcross="1"')}
+        ${cellStr('Monto Facturado en Servicios', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Monto Facturado en Bienes', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Total Monto Facturado', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS Facturado', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS Retenido', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS sujeto a Proporcionalidad (Art. 349)', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS llevado al Costo', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS por Adelantar', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ITBIS percibido en compras', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Tipo de Retención en ISR', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Monto Retención Renta', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('ISR Percibido en compras', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Impuesto Selectivo al Consumo', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Otros Impuesto/Tasas', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Monto Propina Legal', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Forma de Pago', 'Header', 'ss:MergeDown="1"')}
+        ${cellStr('Estatus', 'Header', 'ss:MergeDown="1"')}
+      </Row>
+      <Row ss:Height="18">
+        ${cellStr('AAAAMM', 'SubHeader', 'ss:Index="7"')}
+        ${cellStr('DD', 'SubHeader')}
+        ${cellStr('AAAAMM', 'SubHeader')}
+        ${cellStr('DD', 'SubHeader')}
+      </Row>
+      ${official606RowsXml}
+      <Row ss:Height="21">
+        ${cellStr(`TOTALES FORMATO 606 (${rowCount606} registro(s))`, 'TotalLabel', 'ss:MergeAcross="9"')}
+        ${cellSum(sumServicios, rowCount606)}
+        ${cellSum(sumBienes, rowCount606)}
+        ${cellSum(sumFacturado, rowCount606)}
+        ${cellSum(sumItbisFact, rowCount606)}
+        ${cellSum(sumItbisRet, rowCount606)}
+        ${cellSum(sumItbisProp, rowCount606)}
+        ${cellSum(sumItbisCosto, rowCount606)}
+        ${cellSum(sumItbisAdel, rowCount606)}
+        ${cellSum(sumItbisPerc, rowCount606)}
+        ${cellStr('', 'TotalLabel')}
+        ${cellSum(sumIsrRet, rowCount606)}
+        ${cellSum(sumIsrPerc, rowCount606)}
+        ${cellSum(sumIsc, rowCount606)}
+        ${cellSum(sumOtros, rowCount606)}
+        ${cellSum(sumPropina, rowCount606)}
+        ${cellStr('', 'TotalLabel')}
+        ${cellStr('', 'TotalLabel')}
+      </Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Detalle_Suplidores_606">
+    <Table>
+      <Column ss:Width="52"/>
+      <Column ss:Width="95"/>
+      <Column ss:Width="240"/>
+      <Column ss:Width="120"/>
+      <Column ss:Width="85"/>
+      <Column ss:Width="260"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="115"/>
+      <Column ss:Width="95"/>
+      <Row ss:Height="24">
+        ${cellStr('Línea', 'Header')}
         ${cellStr('RNC Emisor', 'Header')}
         ${cellStr('Razón Social Emisor', 'Header')}
-        ${cellStr('RNC Comprador', 'Header')}
-        ${cellStr('Razón Social Comprador', 'Header')}
         ${cellStr('e-NCF / NCF', 'Header')}
-        ${cellStr('Fecha Emisión', 'Header')}
-        ${cellStr('Tipo Gasto 606', 'Header')}
-        ${cellStr('Monto Neto Gravado', 'Header')}
-        ${cellStr('Total de ITBIS', 'Header')}
-        ${cellStr('ITBIS Por Adelantar', 'Header')}
-        ${cellStr('ITBIS Retenido', 'Header')}
-        ${cellStr('ISR Retenido', 'Header')}
+        ${cellStr('Fecha (AAAAMMDD)', 'Header')}
+        ${cellStr('Tipo de Gasto 606 DGII', 'Header')}
+        ${cellStr('Monto Neto Facturado', 'Header')}
+        ${cellStr('ITBIS Facturado', 'Header')}
+        ${cellStr('ITBIS por Adelantar', 'Header')}
         ${cellStr('Monto Total', 'Header')}
-        ${cellStr('Estado DGII', 'Header')}
+        ${cellStr('Estado', 'Header')}
       </Row>
-      ${purchaseRowsXml}
-      <Row>
-        ${cellStr('TOTALES COMPRAS (606)', 'Total')}
-        ${cellStr(`${scopedPurchases.length} registro(s)`, 'Total')}
-        ${cellStr('', 'Total')}
-        ${cellStr('', 'Total')}
-        ${cellStr('', 'Total')}
-        ${cellStr('', 'Total')}
-        ${cellStr('', 'Total')}
-        ${cellNum(totalNetoCompras, 'Total')}
-        ${cellNum(totalItbisCompras, 'Total')}
-        ${cellNum(reports.summaryIT1.casilla26_ItbisPagadoComprasAdelantar, 'Total')}
-        ${cellNum(reports.summaryIT1.casilla40_ItbisRetenidoAPagarTerceros, 'Total')}
-        ${cellNum(reports.summaryIR17.retenciones606Locales, 'Total')}
-        ${cellNum(totalGeneralCompras, 'Total')}
-        ${cellStr('', 'Total')}
+      ${supplierDetailRowsXml}
+      <Row ss:Height="20">
+        ${cellStr('TOTALES COMPRAS', 'TotalLabel', 'ss:MergeAcross="5"')}
+        ${cellNum(sumFacturado, 'TotalNum')}
+        ${cellNum(sumItbisFact, 'TotalNum')}
+        ${cellNum(sumItbisAdel, 'TotalNum')}
+        ${cellNum(sumFacturado + sumItbisFact, 'TotalNum')}
+        ${cellStr('', 'TotalLabel')}
       </Row>
     </Table>
   </Worksheet>
   <Worksheet ss:Name="Ventas_607">
     <Table>
-      <Row>
+      <Column ss:Width="95"/>
+      <Column ss:Width="200"/>
+      <Column ss:Width="95"/>
+      <Column ss:Width="200"/>
+      <Column ss:Width="120"/>
+      <Column ss:Width="90"/>
+      <Column ss:Width="85"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="105"/>
+      <Column ss:Width="110"/>
+      <Column ss:Width="95"/>
+      <Row ss:Height="24">
         ${cellStr('RNC Emisor', 'Header')}
         ${cellStr('Razón Social Emisor', 'Header')}
         ${cellStr('RNC Comprador', 'Header')}
@@ -3342,18 +3743,28 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   </Worksheet>
   <Worksheet ss:Name="Resumen_IT1_IR17">
     <Table>
-      <Row>${cellStr('Concepto Declaración DGII', 'Header')}${cellStr('Monto RD$', 'Header')}</Row>
-      <Row>${cellStr('Casilla 1 - Total Ingresos Brutos')}${cellNum(reports.summaryIT1.casilla1_TotalIngresosBrutos)}</Row>
-      <Row>${cellStr('Casilla 22 - ITBIS Cobrado en Ventas')}${cellNum(reports.summaryIT1.casilla22_ItbisCobradoVentas)}</Row>
-      <Row>${cellStr('Casilla 26 - ITBIS Pagado en Compras (Adelantar 606)')}${cellNum(reports.summaryIT1.casilla26_ItbisPagadoComprasAdelantar)}</Row>
-      <Row>${cellStr('Casilla 33 - ITBIS Neto a Pagar (IT-1)', 'Total')}${cellNum(reports.summaryIT1.casilla33_ItbisNetoAPagar, 'Total')}</Row>
-      <Row>${cellStr('IR-17 - Total ISR Retenido a Declarar')}${cellNum(reports.summaryIR17.totalIsrAPagarIR17)}</Row>
+      <Column ss:Width="340"/>
+      <Column ss:Width="140"/>
+      <Row ss:Height="24">${cellStr('Concepto Declaración DGII', 'Header')}${cellStr('Monto RD$', 'Header')}</Row>
+      <Row ss:Height="19">${cellStr('Casilla 1 - Total Ingresos Brutos', 'CellText')}${cellNum(reports.summaryIT1.casilla1_TotalIngresosBrutos, 'Num')}</Row>
+      <Row ss:Height="19">${cellStr('Casilla 22 - ITBIS Cobrado en Ventas', 'CellText')}${cellNum(reports.summaryIT1.casilla22_ItbisCobradoVentas, 'Num')}</Row>
+      <Row ss:Height="19">${cellStr('Casilla 26 - ITBIS Pagado en Compras (Adelantar 606)', 'CellText')}${cellNum(reports.summaryIT1.casilla26_ItbisPagadoComprasAdelantar, 'Num')}</Row>
+      <Row ss:Height="21">${cellStr('Casilla 33 - ITBIS Neto a Pagar (IT-1)', 'TotalLabel')}${cellNum(reports.summaryIT1.casilla33_ItbisNetoAPagar, 'TotalNum')}</Row>
+      <Row ss:Height="19">${cellStr('IR-17 - Total ISR Retenido a Declarar', 'CellText')}${cellNum(reports.summaryIR17.totalIsrAPagarIR17, 'Num')}</Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Catalogos_DGII_606">
+    <Table>
+      <Column ss:Width="210"/>
+      <Column ss:Width="380"/>
+      <Row ss:Height="22">${cellStr('Campo Formato 606', 'Header')}${cellStr('Valor Oficial DGII (NG 07-2018 y 05-2019)', 'Header')}</Row>
+      ${catalogRowsXml}
     </Table>
   </Worksheet>
 </Workbook>`;
 
     return {
-      filename: `Libro_Contable_DGII_${reports.rnc || 'EMPRESA'}_${period}.xls`,
+      filename: `Formato_606_DGII_${reports.rnc || 'EMPRESA'}_${period}.xls`,
       xmlWorkbook,
     };
   }

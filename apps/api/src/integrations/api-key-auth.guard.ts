@@ -7,13 +7,24 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import * as crypto from 'crypto';
 import { prisma } from '@factura-ecf/database';
 import { CacheService } from '../common/cache.service';
+import { CryptoService } from '../common/crypto.service';
 
 export const API_KEY_SCOPE_KEY = 'apiKeyScope';
 export const RequireApiKeyScope = (scope: 'invoices:write' | 'invoices:read') =>
   SetMetadata(API_KEY_SCOPE_KEY, scope);
+
+interface CachedApiKeyCandidate {
+  id: string;
+  tenantId: string;
+  userId: string | null;
+  keyHash: string;
+  scopes: string[];
+  isActive: boolean;
+  revoked: boolean;
+  environment: 'SANDBOX' | 'PRODUCTION';
+}
 
 @Injectable()
 export class ApiKeyAuthGuard implements CanActivate {
@@ -22,7 +33,8 @@ export class ApiKeyAuthGuard implements CanActivate {
 
   constructor(
     private readonly reflector: Reflector,
-    private readonly cacheService: CacheService
+    private readonly cacheService: CacheService,
+    private readonly cryptoService: CryptoService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -42,50 +54,63 @@ export class ApiKeyAuthGuard implements CanActivate {
     if (!rawKey) {
       throw new HttpException(
         {
-          error: 'Falta encabezado Authorization: Bearer <api_key>.',
+          error: 'Falta encabezado Authorization: Bearer <api_key> o X-API-Key.',
           campo: 'Authorization',
         },
         HttpStatus.UNAUTHORIZED
       );
     }
 
-    const keyHash = crypto.createHash('sha256').update(rawKey, 'utf8').digest('hex');
-    const cacheKey = `pub_apikey:${keyHash.slice(0, 24)}`;
+    // Calcular HMAC-SHA256 con API_KEY_PEPPER (+ respaldo SHA-256 solo para claves legacy ak_*)
+    const hmacHash = this.cryptoService.hashApiKey(rawKey);
+    const legacyHash = rawKey.startsWith('sk_') ? null : this.cryptoService.hashSha256(rawKey);
+    const keyPrefix = rawKey.slice(0, 12);
+    const cacheKey = `pub_apikey_prefix:${keyPrefix}`;
 
-    let keyRecord: {
-      id: string;
-      tenantId: string;
-      scopes: string[];
-      isActive: boolean;
-      revoked: boolean;
-      environment: 'SANDBOX' | 'PRODUCTION';
-    } | null = await this.cacheService.get(cacheKey);
+    let candidates: CachedApiKeyCandidate[] | null = await this.cacheService.get(cacheKey);
 
-    if (!keyRecord) {
-      const dbRecord = await prisma.apiKey.findUnique({
-        where: { keyHash },
+    if (!candidates) {
+      const dbRecords = await prisma.apiKey.findMany({
+        where: { keyPrefix },
         include: { tenant: { select: { id: true, environment: true } } },
       });
 
-      if (dbRecord && dbRecord.tenant) {
-        keyRecord = {
-          id: dbRecord.id,
-          tenantId: dbRecord.tenantId,
+      candidates = dbRecords
+        .filter((r) => Boolean(r.tenant))
+        .map((r) => ({
+          id: r.id,
+          tenantId: r.tenantId,
+          userId: r.createdByUserId || null,
+          keyHash: r.keyHash,
           scopes:
-            Array.isArray(dbRecord.scopes) && dbRecord.scopes.length > 0
-              ? dbRecord.scopes
+            Array.isArray(r.scopes) && r.scopes.length > 0
+              ? r.scopes
               : ['invoices:write', 'invoices:read'],
-          isActive: dbRecord.isActive,
-          revoked: Boolean(dbRecord.revoked),
-          environment: (dbRecord.tenant.environment || dbRecord.environment || 'SANDBOX') as
+          isActive: r.isActive,
+          revoked: Boolean(r.revoked),
+          environment: (r.tenant.environment || r.environment || 'SANDBOX') as
             | 'SANDBOX'
             | 'PRODUCTION',
-        };
-        await this.cacheService.set(cacheKey, keyRecord, 30);
+        }));
+
+      if (candidates.length > 0) {
+        await this.cacheService.set(cacheKey, candidates, 30);
       }
     }
 
-    if (!keyRecord || !keyRecord.isActive || keyRecord.revoked) {
+    // Validación explícita en tiempo constante (crypto.timingSafeEqual)
+    let matched: CachedApiKeyCandidate | undefined;
+    for (const candidate of candidates || []) {
+      const matchHmac = this.cryptoService.verifyHashTimingSafe(hmacHash, candidate.keyHash);
+      const matchLegacy =
+        Boolean(legacyHash) && this.cryptoService.verifyHashTimingSafe(legacyHash!, candidate.keyHash);
+      if (matchHmac || matchLegacy) {
+        matched = candidate;
+        break;
+      }
+    }
+
+    if (!matched || !matched.isActive || matched.revoked) {
       throw new HttpException(
         {
           error: 'API Key inválida o revocada.',
@@ -100,7 +125,7 @@ export class ApiKeyAuthGuard implements CanActivate {
       API_KEY_SCOPE_KEY,
       [context.getHandler(), context.getClass()]
     );
-    if (requiredScope && !keyRecord.scopes.includes(requiredScope) && !keyRecord.scopes.includes('*')) {
+    if (requiredScope && !matched.scopes.includes(requiredScope) && !matched.scopes.includes('*')) {
       throw new HttpException(
         {
           error: `La API Key no posee el permiso requerido '${requiredScope}'.`,
@@ -112,10 +137,10 @@ export class ApiKeyAuthGuard implements CanActivate {
 
     // Rate Limit básico por key: 60 req/min
     const now = Date.now();
-    let windowRec = this.rateWindows.get(keyRecord.id);
+    let windowRec = this.rateWindows.get(matched.id);
     if (!windowRec || now > windowRec.resetAt) {
       windowRec = { count: 1, resetAt: now + 60_000 };
-      this.rateWindows.set(keyRecord.id, windowRec);
+      this.rateWindows.set(matched.id, windowRec);
     } else {
       windowRec.count += 1;
     }
@@ -138,15 +163,16 @@ export class ApiKeyAuthGuard implements CanActivate {
     // Actualizar ultimo_uso sin bloquear la respuesta
     prisma.apiKey
       .update({
-        where: { id: keyRecord.id },
+        where: { id: matched.id },
         data: { lastUsedAt: new Date() },
       })
       .catch(() => undefined);
 
-    req.tenantId = keyRecord.tenantId;
-    req.apiKeyId = keyRecord.id;
-    req.apiKeyScopes = keyRecord.scopes;
-    req.environment = keyRecord.environment;
+    req.tenantId = matched.tenantId;
+    req.apiKeyId = matched.id;
+    req.apiKeyUserId = matched.userId;
+    req.apiKeyScopes = matched.scopes;
+    req.environment = matched.environment;
     req.isApiKeyRequest = true;
 
     return true;

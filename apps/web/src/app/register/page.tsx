@@ -4,7 +4,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AntekLogo } from '../../components/AntekLogo';
-import { API_BASE_URL, formatDOP } from '../../lib/api';
+import { formatDOP, lookupRncClient } from '../../lib/api';
 import {
   Lock,
   Mail,
@@ -67,12 +67,15 @@ function RegisterForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [rncLookingUp, setRncLookingUp] = useState(false);
   const [rncStatus, setRncStatus] = useState<string | null>(null);
+  const [rncError, setRncError] = useState<string | null>(null);
+  const [rncValid, setRncValid] = useState<boolean | null>(null);
 
   const [form, setForm] = useState({
     name: '',
     email: '',
     rnc: '',
     razonSocial: '',
+    nombreComercial: '',
     password: '',
     plan: defaultPlan,
     consentLegal: false,
@@ -84,36 +87,64 @@ function RegisterForm() {
 
   const pwStrength = getPasswordStrength(form.password);
 
-  // Autocompletar Razón Social al escribir RNC (9 u 11 dígitos)
+  // Autocompletar Razón Social al escribir RNC (9 dígitos) o Cédula (11 dígitos)
   useEffect(() => {
     const clean = form.rnc.replace(/\D/g, '');
     if (clean.length !== 9 && clean.length !== 11) {
       setRncStatus(null);
+      setRncError(
+        clean.length > 0 && clean.length > 11
+          ? 'Máximo 9 dígitos (RNC) u 11 dígitos (Cédula).'
+          : null
+      );
+      setRncValid(clean.length === 0 ? null : null);
+      setRncLookingUp(false);
       return;
     }
+
     let cancelled = false;
     setRncLookingUp(true);
     setRncStatus(null);
+    setRncError(null);
 
-    fetch(`${API_BASE_URL}/v1/rnc/lookup?rnc=${clean}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled || !data?.razonSocial) return;
-        const isGeneric = /^RNC\s+\d+$/i.test(data.razonSocial) || /^Cédula\s+\d+$/i.test(data.razonSocial);
-        if (!isGeneric) {
-          setForm((prev) => ({ ...prev, razonSocial: data.razonSocial }));
-          setRncStatus(`RNC válido (${data.estado || 'ACTIVO'})`);
-        } else {
-          setRncStatus('Dígito verificador válido · Ingresa tu Razón Social');
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setRncLookingUp(false);
-      });
+    const timer = setTimeout(async () => {
+      const res = await lookupRncClient(clean);
+      if (cancelled) return;
+      setRncLookingUp(false);
+
+      if (!res.ok || !res.data) {
+        setRncValid(false);
+        setRncError(
+          res.error || 'El RNC o Cédula ingresado no supera la validación oficial de la DGII.'
+        );
+        return;
+      }
+
+      const data = res.data;
+      setRncValid(true);
+      const isGeneric =
+        data.foundInPadron === false ||
+        /^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(data.razonSocial);
+
+      if (!isGeneric && data.razonSocial) {
+        setForm((prev) => ({
+          ...prev,
+          razonSocial: data.razonSocial,
+          nombreComercial: data.nombreComercial || data.razonSocial,
+        }));
+        const badgeLabel =
+          data.estado && data.estado !== 'ACTIVO'
+            ? `DGII (${data.estado})`
+            : 'Verificado en DGII ✓';
+        setRncStatus(`${badgeLabel}: ${data.razonSocial}`);
+      } else {
+        setRncStatus('Dígito verificador válido · Completa tu Razón Social');
+      }
+    }, 350);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [form.rnc]);
 
@@ -138,6 +169,16 @@ function RegisterForm() {
     e.preventDefault();
     setError(null);
 
+    const cleanRnc = form.rnc.replace(/\D/g, '');
+    if (cleanRnc.length !== 9 && cleanRnc.length !== 11) {
+      setError('El RNC debe tener exactamente 9 dígitos o la Cédula 11 dígitos numéricos.');
+      return;
+    }
+    if (rncValid === false) {
+      setError(rncError || 'El RNC o Cédula ingresado no es válido ante la DGII.');
+      return;
+    }
+
     if (!form.consentLegal) {
       setError('Debes aceptar la política de privacidad y términos del servicio (Ley 32-23 y Ley 172-13) para continuar.');
       return;
@@ -152,8 +193,9 @@ function RegisterForm() {
         body: JSON.stringify({
           name: form.name.trim(),
           email: form.email.trim(),
-          rnc: form.rnc.replace(/\D/g, ''),
+          rnc: cleanRnc,
           razonSocial: form.razonSocial.trim(),
+          nombreComercial: (form.nombreComercial || form.razonSocial).trim(),
           password: form.password,
           plan: form.plan,
         }),
@@ -186,8 +228,9 @@ function RegisterForm() {
         localStorage.setItem(
           'antek_pending_onboarding',
           JSON.stringify({
-            rnc: form.rnc.replace(/\D/g, ''),
+            rnc: cleanRnc,
             razonSocial: form.razonSocial.trim(),
+            nombreComercial: (form.nombreComercial || form.razonSocial).trim(),
             email: form.email.trim(),
             plan: form.plan,
           })
@@ -355,11 +398,20 @@ function RegisterForm() {
                     </div>
                     {rncLookingUp && (
                       <p className="text-[11px] text-sky-400 mt-1 flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" /> Validando RNC...
+                        <Loader2 className="w-3 h-3 animate-spin" /> Validando RNC en DGII...
                       </p>
                     )}
                     {rncStatus && !rncLookingUp && (
-                      <p className="text-[11px] text-emerald-400 mt-1">{rncStatus}</p>
+                      <p className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        <span>{rncStatus}</span>
+                      </p>
+                    )}
+                    {rncError && !rncLookingUp && (
+                      <p className="text-[11px] text-rose-400 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 shrink-0" />
+                        <span>{rncError}</span>
+                      </p>
                     )}
                   </div>
 

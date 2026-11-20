@@ -209,8 +209,11 @@ export class PurchasesService {
 
     let razonSocialEmisor = `RNC ${rncEmisor}`;
     try {
-      const emisorData = this.rncService.lookup(rncEmisor);
-      if (emisorData?.razonSocial && !emisorData.razonSocial.startsWith('EMPRESA REGISTRADA RNC ')) {
+      const emisorData = await this.rncService.lookup(rncEmisor);
+      if (
+        emisorData?.razonSocial &&
+        !/^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(emisorData.razonSocial)
+      ) {
         razonSocialEmisor = emisorData.razonSocial;
       }
     } catch {}
@@ -250,8 +253,11 @@ export class PurchasesService {
 
       if (!razonSocialComprador) {
         try {
-          const compradorData = this.rncService.lookup(rncComprador);
-          if (compradorData?.razonSocial && !compradorData.razonSocial.startsWith('EMPRESA REGISTRADA RNC ')) {
+          const compradorData = await this.rncService.lookup(rncComprador);
+          if (
+            compradorData?.razonSocial &&
+            !/^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(compradorData.razonSocial)
+          ) {
             razonSocialComprador = compradorData.razonSocial;
           }
         } catch {}
@@ -327,8 +333,10 @@ export class PurchasesService {
       let resolvedName = payload.razonSocialEmisor?.trim() || '';
       if (!resolvedName) {
         try {
-          const looked = this.rncService.lookup(cleanRnc).razonSocial;
-          resolvedName = looked.startsWith('EMPRESA REGISTRADA RNC ') ? `RNC ${cleanRnc}` : looked;
+          const looked = (await this.rncService.lookup(cleanRnc)).razonSocial;
+          resolvedName = /^(RNC|C[eé]dula|EMPRESA REGISTRADA RNC)\s+\d+$/i.test(looked)
+            ? `RNC ${cleanRnc}`
+            : looked;
         } catch {
           resolvedName = `RNC ${cleanRnc}`;
         }
@@ -816,40 +824,49 @@ export class PurchasesService {
     });
 
     const lines: string[] = [];
-    lines.push(`606|${rnc}|${periodo || new Date().toISOString().slice(0, 7).replace('-', '')}|${uniquePurchases.length}`);
+    const targetPeriod = periodo || new Date().toISOString().slice(0, 7).replace('-', '');
+    lines.push(`606|${rnc}|${targetPeriod}|${uniquePurchases.length}`);
 
     uniquePurchases.forEach((p: any) => {
-      const rncCedula = p.rncEmisor;
+      const rncCedula = String(p.rncEmisor || '').replace(/\D/g, '');
       const tipoId = rncCedula.length === 9 ? '1' : '2';
-      const tipoGasto = p.tipoGasto606 || '02';
+      const tipoGasto = String(p.tipoGasto606 || '02').padStart(2, '0');
       const ncf = p.encf;
-      const fecha = String(p.fechaEmision).replace(/-/g, '');
-      const montoTotal = Number(p.montoTotal).toFixed(2);
-      const itbisFacturado = Number(p.totalItbis).toFixed(2);
+      const fecha = String(p.fechaEmision || '').replace(/-/g, '');
+      const montoTotal = Number(p.montoTotal || 0);
+      const itbisNum = Number(p.totalItbis || 0);
+      const montoNeto = Math.max(0, Number((montoTotal - itbisNum).toFixed(2)));
+      const isBienes = tipoGasto === '09' || tipoGasto === '10';
+      const montoServicios = isBienes ? '0.00' : montoNeto.toFixed(2);
+      const montoBienes = isBienes ? montoNeto.toFixed(2) : '0.00';
+      const montoFacturado = montoNeto.toFixed(2);
+      const itbisFacturado = itbisNum.toFixed(2);
 
+      // 23 campos oficiales Norma General 07-2018 (Formato 606 DGII)
       const line = [
-        rncCedula,
-        tipoId,
-        tipoGasto,
-        ncf,
-        '',
-        fecha,
-        fecha,
-        montoTotal,
-        montoTotal,
-        itbisFacturado,
-        '0.00',
-        '0.00',
-        '0.00',
-        itbisFacturado,
-        '0.00',
-        '',
-        '0.00',
-        '0.00',
-        '0.00',
-        '0.00',
-        '0.00',
-        '01',
+        rncCedula,      // 1. RNC o Cédula
+        tipoId,         // 2. Tipo Id
+        tipoGasto,      // 3. Tipo Bienes y Servicios Comprados
+        ncf,            // 4. NCF / e-NCF
+        '',             // 5. NCF o Documento Modificado
+        fecha,          // 6. Fecha Comprobante (AAAAMMDD)
+        '',             // 7. Fecha Pago (vacío si no hubo retención)
+        montoServicios, // 8. Monto Facturado en Servicios (sin ITBIS)
+        montoBienes,    // 9. Monto Facturado en Bienes (sin ITBIS)
+        montoFacturado, // 10. Total Monto Facturado (sin ITBIS)
+        itbisFacturado, // 11. ITBIS Facturado
+        '0.00',         // 12. ITBIS Retenido
+        '0.00',         // 13. ITBIS sujeto a Proporcionalidad
+        '0.00',         // 14. ITBIS llevado al Costo
+        itbisFacturado, // 15. ITBIS por Adelantar
+        '0.00',         // 16. ITBIS percibido en compras
+        '',             // 17. Tipo de Retención en ISR
+        '0.00',         // 18. Monto Retención Renta
+        '0.00',         // 19. ISR Percibido en compras
+        '0.00',         // 20. Impuesto Selectivo al Consumo
+        '0.00',         // 21. Otros Impuesto/Tasas
+        '0.00',         // 22. Monto Propina Legal
+        '01',           // 23. Forma de Pago
       ].join('|');
 
       lines.push(line);
@@ -858,7 +875,7 @@ export class PurchasesService {
     return {
       filename: `DGII_F_606_${rnc}_${periodo || 'PERIODO'}.txt`,
       content: lines.join('\r\n'),
-      totalRecords: purchases.length,
+      totalRecords: uniquePurchases.length,
     };
   }
 }

@@ -295,7 +295,7 @@ export class InvoicesController {
 
     res.set({
       'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Disposition': `attachment; filename="DGII_${fmt}_${reports.rnc}_${period}.txt"`,
+      'Content-Disposition': `attachment; filename="DGII_F_${fmt}_${reports.rnc}_${period}.txt"`,
     });
     res.send(content);
   }

@@ -19,7 +19,7 @@ const PUBLIC_ORIGIN = 'https://factura.antek.com.do';
 
 const CURL_POS_32 = `curl -X POST ${PUBLIC_ORIGIN}/api/v1/invoices \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer ak_live_REEMPLAZA_CON_TU_API_KEY" \\
+  -H "Authorization: Bearer sk_live_REEMPLAZA_CON_TU_API_KEY" \\
   -d '{
     "external_id": "ORD-POS-00481",
     "tipo_ecf": 32,
@@ -46,7 +46,7 @@ const CURL_POS_32 = `curl -X POST ${PUBLIC_ORIGIN}/api/v1/invoices \\
 
 const CURL_CREDITO_31 = `curl -X POST ${PUBLIC_ORIGIN}/api/v1/invoices \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer ak_live_REEMPLAZA_CON_TU_API_KEY" \\
+  -H "Authorization: Bearer sk_live_REEMPLAZA_CON_TU_API_KEY" \\
   -d '{
     "external_id": "WEB-CARRITO-9921",
     "tipo_ecf": 31,
@@ -68,11 +68,11 @@ const CURL_CREDITO_31 = `curl -X POST ${PUBLIC_ORIGIN}/api/v1/invoices \\
 
 const CURL_QUERY = `# Consultar por ID interno o e-NCF
 curl -X GET "${PUBLIC_ORIGIN}/api/v1/invoices/E320000000001" \\
-  -H "Authorization: Bearer ak_live_REEMPLAZA_CON_TU_API_KEY"
+  -H "Authorization: Bearer sk_live_REEMPLAZA_CON_TU_API_KEY"
 
 # Consultar por external_id del POS / sitio web
 curl -X GET "${PUBLIC_ORIGIN}/api/v1/invoices?external_id=ORD-POS-00481" \\
-  -H "Authorization: Bearer ak_live_REEMPLAZA_CON_TU_API_KEY"`;
+  -H "Authorization: Bearer sk_live_REEMPLAZA_CON_TU_API_KEY"`;
 
 const VERIFY_WEBHOOK_NODE = `import crypto from 'crypto';
 
@@ -157,13 +157,13 @@ export default function ApiDocsPage() {
             <ShieldCheck className="w-4 h-4 text-sky-400" /> 1. Autenticación &amp; Rate Limit
           </h2>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Envía tu clave generada en <strong>Integraciones &amp; API</strong> usando el encabezado estándar Bearer:
+            Envía tu clave generada en <strong>Integraciones &amp; API</strong> usando el encabezado Bearer o <code className="text-sky-300">X-API-Key</code>:
           </p>
           <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-sky-300 overflow-x-auto">
-            Authorization: Bearer ak_live_&lt;48_caracteres_hex&gt;
+            Authorization: Bearer sk_live_&lt;64_caracteres_hex&gt;   (o X-API-Key: sk_live_...)
           </pre>
           <ul className="text-xs text-slate-400 list-disc pl-5 space-y-1">
-            <li>La API Key completa se muestra una sola vez al crearla; almacenamos únicamente el hash SHA-256.</li>
+            <li>La API Key completa se muestra una sola vez al crearla; almacenamos únicamente el hash <strong>HMAC-SHA256</strong> con secreto <code className="text-slate-200">API_KEY_PEPPER</code> y validamos cada request en tiempo constante (<code className="text-slate-200">timingSafeEqual</code>). Las claves previas <code className="text-slate-200">ak_live_...</code> siguen siendo compatibles.</li>
             <li>Límite de velocidad por API Key: <strong>60 peticiones/minuto</strong> (headers <code className="text-slate-200">X-RateLimit-Remaining</code>).</li>
             <li>Idempotencia garantizada: si reenvías la misma venta con igual <code className="text-slate-200">external_id</code>, devolvemos HTTP <strong>200</strong> con el comprobante original sin duplicar secuencias.</li>
           </ul>

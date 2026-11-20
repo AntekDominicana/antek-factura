@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { name, email, rnc, razonSocial, direccion, password, plan } = body;
+    const { name, email, rnc, razonSocial, nombreComercial, direccion, password, plan } = body;
 
     if (!name || !email || !rnc || !razonSocial || !password) {
       return NextResponse.json(
@@ -21,6 +21,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         rnc: String(rnc).trim(),
         razonSocial: String(razonSocial).trim(),
+        nombreComercial: nombreComercial ? String(nombreComercial).trim() : undefined,
         direccion: String(direccion || 'República Dominicana').trim(),
         correo: String(email).trim(),
         fullName: String(name).trim(),

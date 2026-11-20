@@ -391,7 +391,7 @@ export default function DevelopersSettingsPage() {
             <h2 className="text-sm font-bold text-slate-900">1. API Keys para POS &amp; Sitios Web</h2>
           </div>
           <span className="text-[11px] text-slate-500 font-mono">
-            Header: Authorization: Bearer ak_live_... (60 req/min)
+            Header: Authorization: Bearer sk_live_... o X-API-Key (HMAC-SHA256 + Pepper · 60 req/min)
           </span>
         </div>
 
@@ -419,7 +419,7 @@ export default function DevelopersSettingsPage() {
             <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                ¡Guarda tu clave ahora! Por seguridad solo almacenamos el hash SHA-256 y no volverá a mostrarse ({createdKeyOnce.nombre}).
+                ¡Guarda tu clave ahora! Por seguridad solo almacenamos su hash HMAC-SHA256 (con API_KEY_PEPPER) y nunca volverá a mostrarse ({createdKeyOnce.nombre}).
               </span>
             </div>
             <div className="flex items-center gap-2">
