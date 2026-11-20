@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
 import { API_BASE_URL, apiFetch, apiDownload, formatDOP, ECF_TYPE_LABELS } from '../../../../lib/api';
+import { downloadRawQrPng, downloadSignedQrStampPng } from '../../../../lib/qr-stamp';
 import {
   ArrowLeft,
   Receipt,
@@ -15,6 +16,7 @@ import {
   Printer,
   Copy,
   ExternalLink,
+  QrCode,
 } from 'lucide-react';
 
 export default function InvoiceDetailPage() {
@@ -25,6 +27,8 @@ export default function InvoiceDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [xmlData, setXmlData] = useState<string | null>(null);
   const [xmlModal, setXmlModal] = useState(false);
+  const [downloadingQr, setDownloadingQr] = useState<'stamp' | 'raw' | null>(null);
+  const qrContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadDetail() {
@@ -82,14 +86,26 @@ export default function InvoiceDetailPage() {
         >
           <ArrowLeft className="w-4 h-4" /> Volver al Listado
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={handleFetchXml}
-            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center gap-1.5 transition"
+            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
           >
             <Code2 className="w-4 h-4 text-emerald-600" />
             <span>Ver XML Firmado</span>
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              apiDownload(`/v1/invoices/${id}/xml`, `${invoice.encf || id}.xml`).catch((err) =>
+                alert(err?.message || 'No se pudo descargar el XML'),
+              )
+            }
+            className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>Descargar XML</span>
           </button>
           <button
             type="button"
@@ -98,7 +114,7 @@ export default function InvoiceDetailPage() {
                 alert(err?.message || 'No se pudo descargar el PDF')
               )
             }
-            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition"
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
           >
             <Printer className="w-4 h-4" />
             <span>Imprimir PDF</span>
@@ -130,24 +146,92 @@ export default function InvoiceDetailPage() {
         </div>
 
         {/* Timbre Fiscal Oficial */}
-        <div className="p-5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row items-center gap-5">
-          <div className="bg-white p-2 rounded-xl border border-slate-200 shrink-0 shadow-xs">
-            <QRCodeSVG value={invoice.urlQr || 'https://ecf.dgii.gov.do'} size={110} level="M" />
-          </div>
-          <div className="space-y-1.5 text-xs text-slate-600 flex-1 min-w-0">
-            <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              Timbre Fiscal Electrónico DGII Oficial
+        <div className="p-5 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+          <div className="flex flex-col sm:flex-row items-center gap-5">
+            <div
+              ref={qrContainerRef}
+              className="bg-white p-2 rounded-xl border border-slate-200 shrink-0 shadow-xs"
+            >
+              <QRCodeSVG value={invoice.urlQr || 'https://ecf.dgii.gov.do'} size={116} level="M" />
             </div>
-            <p>
-              Código de Seguridad: <strong className="font-mono text-slate-900">{invoice.codigoSeguridad || 'N/A'}</strong>
-            </p>
-            <p>
-              Fecha de Emisión: <strong className="font-mono text-slate-900">{invoice.fechaEmision || '—'}</strong>
-            </p>
-            <p className="text-[11px] text-slate-400 break-all">
-              URL Consulta Timbre: <a href={invoice.urlQr} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">{invoice.urlQr}</a>
-            </p>
+            <div className="space-y-1.5 text-xs text-slate-600 flex-1 min-w-0">
+              <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                Timbre Fiscal Electrónico DGII Oficial
+              </div>
+              <p>
+                Código de Seguridad: <strong className="font-mono text-slate-900">{invoice.codigoSeguridad || 'N/A'}</strong>
+              </p>
+              <p>
+                Fecha de Emisión: <strong className="font-mono text-slate-900">{invoice.fechaEmision || '—'}</strong>
+              </p>
+              <p>
+                Fecha / Hora Firma Digital:{' '}
+                <strong className="font-mono text-slate-900">
+                  {invoice.fechaHoraFirma
+                    ? new Date(invoice.fechaHoraFirma).toLocaleString('es-DO')
+                    : invoice.createdAt
+                      ? new Date(invoice.createdAt).toLocaleString('es-DO')
+                      : invoice.fechaEmision || '—'}
+                </strong>
+              </p>
+              <p className="text-[11px] text-slate-400 break-all">
+                URL Consulta Timbre:{' '}
+                <a href={invoice.urlQr} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
+                  {invoice.urlQr}
+                </a>
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-slate-200/80 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={downloadingQr !== null}
+              onClick={async () => {
+                try {
+                  setDownloadingQr('stamp');
+                  await downloadSignedQrStampPng(qrContainerRef.current, {
+                    encf: invoice.encf || id,
+                    tipoEcf: Number(invoice.tipoEcf) || undefined,
+                    rncEmisor: invoice.rncEmisor,
+                    razonSocialEmisor: invoice.razonSocialEmisor,
+                    codigoSeguridad: invoice.codigoSeguridad,
+                    fechaEmision: invoice.fechaEmision,
+                    fechaFirma: invoice.fechaHoraFirma || invoice.createdAt || invoice.fechaEmision,
+                    montoTotal: invoice.montoTotal,
+                    rncComprador: invoice.rncComprador,
+                    razonSocialComprador: invoice.razonSocialComprador,
+                  });
+                } catch (err: any) {
+                  alert(err?.message || 'No se pudo descargar el QR con firma');
+                } finally {
+                  setDownloadingQr(null);
+                }
+              }}
+              className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 transition cursor-pointer"
+            >
+              <QrCode className="w-4 h-4" />
+              <span>{downloadingQr === 'stamp' ? 'Generando PNG...' : 'Descargar QR + Firma (.png)'}</span>
+            </button>
+            <button
+              type="button"
+              disabled={downloadingQr !== null}
+              onClick={async () => {
+                try {
+                  setDownloadingQr('raw');
+                  await downloadRawQrPng(qrContainerRef.current, invoice.encf || id);
+                } catch (err: any) {
+                  alert(err?.message || 'No se pudo descargar el QR');
+                } finally {
+                  setDownloadingQr(null);
+                }
+              }}
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 transition cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{downloadingQr === 'raw' ? 'Descargando...' : 'Solo QR (.png)'}</span>
+            </button>
           </div>
         </div>
 

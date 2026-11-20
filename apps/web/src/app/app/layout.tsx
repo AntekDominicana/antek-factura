@@ -26,6 +26,7 @@ import {
   LogOut,
   Clock,
   Crown,
+  FileKey2,
 } from 'lucide-react';
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
@@ -133,6 +134,7 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const settingsNav = [
     { href: '/app/settings/profile', label: 'Mi Perfil & Plan', icon: User },
     { href: '/app/settings/company', label: 'Mi Empresa & Logo', icon: Building2 },
+    { href: '/app/settings/fiscal', label: 'Conexión Fiscal & .p12', icon: FileKey2 },
     { href: '/app/settings/team', label: 'Equipo & Cajeros', icon: Users2 },
     { href: '/app/settings/security', label: 'Seguridad & 2FA', icon: ShieldCheck },
     { href: '/app/settings/developers', label: 'Integraciones & API', icon: Code2 },

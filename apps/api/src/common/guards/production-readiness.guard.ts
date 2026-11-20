@@ -6,29 +6,18 @@ import {
   PreconditionFailedException,
 } from '@nestjs/common';
 import { prisma } from '@factura-ecf/database';
-import * as crypto from 'crypto';
 
 @Injectable()
 export class ProductionReadinessGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
 
-    // Determinar el ambiente de destino
-    const environment = req.headers['x-environment'] || req.body?.environment || 'SANDBOX';
-
-    // En SANDBOX se permite operar para pruebas de homologación DGII
-    if (environment !== 'PRODUCTION') {
-      return true;
-    }
-
-    // Resolver tenant
-    const apiKey = req.headers['x-api-key'];
+    const tenantId = req.user?.tenantId || req.tenantId;
     let tenant: any = null;
 
-    if (apiKey) {
-      const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-      tenant = await prisma.tenant.findFirst({
-        where: { apiKeys: { some: { keyHash } } },
+    if (tenantId) {
+      tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
         include: {
           subscription: true,
           sequences: { where: { environment: 'PRODUCTION', isActive: true } },
@@ -36,37 +25,44 @@ export class ProductionReadinessGuard implements CanActivate {
       });
     }
 
-    if (!tenant) {
-      tenant = await prisma.tenant.findFirst({
-        include: {
-          subscription: true,
-          sequences: { where: { environment: 'PRODUCTION', isActive: true } },
-        },
-      });
+    const headerEnv = req.headers['x-environment'] || req.body?.environment;
+    const effectiveEnv = headerEnv || tenant?.environment || 'SANDBOX';
+
+    // En SANDBOX / Certificación no se bloquea emisión por requisitos de producción
+    if (effectiveEnv !== 'PRODUCTION') {
+      return true;
     }
 
     if (!tenant) {
       throw new ForbiddenException('Tenant no identificado para emisión en PRODUCCIÓN.');
     }
 
-    // 1. Validar suscripción activa
-    if (!tenant.subscription || tenant.subscription.status !== 'ACTIVE') {
+    // 1. Validar suscripción (ACTIVA o TRIAL vigente)
+    if (!tenant.subscription || ['SUSPENDED', 'CANCELED'].includes(String(tenant.subscription.status))) {
       throw new ForbiddenException(
-        'Para emitir comprobantes fiscales en PRODUCCIÓN (validez tributaria DGII) se requiere una suscripción ACTIVA en la plataforma.'
+        'Para emitir comprobantes fiscales en PRODUCCIÓN se requiere una suscripción activa en la plataforma.'
       );
     }
 
-    // 2. Validar que exista certificado digital de producción (.p12)
-    if (!tenant.certificadoP12Enc) {
-      throw new PreconditionFailedException(
-        'Falta configurar el Certificado Digital de Persona Jurídica (.p12) emitido por una CA autorizada (Avansi / Optic / Digi-Sign) para PRODUCCIÓN.'
-      );
+    // 2. Validar firma o credenciales según el proveedor fiscal elegido por el cliente
+    if (tenant.fiscalProvider === 'GTI') {
+      if (!tenant.gtiUsuarioEnc || !tenant.gtiClaveEnc) {
+        throw new PreconditionFailedException(
+          'Faltan configurar tus credenciales de GTI Partner (Usuario y Clave GTI) en Configuración → Conexión Fiscal & .p12.'
+        );
+      }
+    } else if (tenant.fiscalProvider === 'DGII_DIRECT') {
+      if (!tenant.certificadoP12Enc) {
+        throw new PreconditionFailedException(
+          'Falta cargar tu Certificado Digital (.p12) para firma XMLDSig en Configuración → Conexión Fiscal & .p12.'
+        );
+      }
     }
 
-    // 3. Validar secuencias fiscales asignadas por DGII
+    // 3. Validar secuencias fiscales asignadas por DGII para ese tipo de e-CF
     if (!tenant.sequences || tenant.sequences.length === 0) {
       throw new PreconditionFailedException(
-        'No existen rangos de secuencias e-NCF activas asignadas por la DGII para el entorno de PRODUCCIÓN.'
+        'No existen rangos de secuencias e-NCF activas para PRODUCCIÓN. Regístralos en Secuencias e-NCF.'
       );
     }
 

@@ -70,7 +70,7 @@ export class AuthService {
         monthlyInvoiceLimit: 100,
         maxUsers: 2,
         maxBranches: 1,
-        allowedEcfTypes: [31, 32, 33, 34, 41, 43],
+        allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
         apiAccess: false,
       },
       MEDIUM: {
@@ -81,7 +81,7 @@ export class AuthService {
         monthlyInvoiceLimit: 600,
         maxUsers: 5,
         maxBranches: 3,
-        allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
+        allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47],
         apiAccess: true,
       },
       PRO: {
@@ -151,7 +151,7 @@ export class AuthService {
           },
         },
         sequences: {
-          create: [31, 32, 33, 34, 41, 43].map((tipoEcf) => ({
+          create: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47].map((tipoEcf) => ({
             environment: 'SANDBOX',
             tipoEcf,
             idRangoSecuencia: 1,

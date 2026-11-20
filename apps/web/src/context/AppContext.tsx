@@ -16,10 +16,16 @@ export interface TenantData {
   logoBase64?: string;
   brandColor?: string;
   invoiceFooter?: string;
-  fiscalProvider?: 'DGII_DIRECT' | 'GTI';
+  fiscalProvider?: 'DGII_DIRECT' | 'GTI' | 'SIMULATOR';
+  fiscalProviderFallback?: 'NONE' | 'GTI' | 'SIMULATOR';
   dgiiLiveMode?: boolean;
   contingencyMode?: boolean;
   environment?: string;
+  hasCertificate?: boolean;
+  certSubject?: string | null;
+  certExpiresAt?: string | null;
+  hasGtiCredentials?: boolean;
+  medioEmision?: string;
   subscriptionPlan?: string;
   subscriptionStatus?: string;
   gracePeriodEndsAt?: string;
@@ -37,7 +43,7 @@ const defaultTenant: TenantData = {
   razonSocial: '',
   isConfigured: false,
   brandColor: '#0284c7',
-  invoiceFooter: 'Gracias por preferirnos — Comprobante Fiscal Electrónico emitido con ANTEK Factura',
+  invoiceFooter: 'Gracias por preferirnos — Comprobante Fiscal Electrónico válido ante la DGII',
   fiscalProvider: 'DGII_DIRECT',
   dgiiLiveMode: false,
   subscriptionPlan: 'business-pro',

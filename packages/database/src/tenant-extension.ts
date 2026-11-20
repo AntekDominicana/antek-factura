@@ -130,7 +130,7 @@ export async function allocateNextConsecutivePessimistic(
   environment: 'SANDBOX' | 'PRODUCTION' = 'SANDBOX'
 ): Promise<{ encf: string; sequenceId: string; consecutive: number }> {
   return prismaClient.$transaction(async (tx) => {
-    // 1. Bloqueo pesimista de fila en PostgreSQL para serializar la asignación
+    // 1. Bloqueo pesimista de fila en PostgreSQL para serializar la asignación sobre el primer rango disponible y vigente
     const rows: any[] = await tx.$queryRaw`
       SELECT id, "tipoEcf", "idRangoSecuencia", "consecutivoDesde", "consecutivoHasta", "ultimoConsecutivo", "fechaVencimiento"
       FROM "EcfSequence"
@@ -138,6 +138,9 @@ export async function allocateNextConsecutivePessimistic(
         AND "tipoEcf" = ${tipoEcf}
         AND "environment" = ${environment}::"SystemEnvironment"
         AND "isActive" = true
+        AND "ultimoConsecutivo" < "consecutivoHasta"
+        AND ("fechaVencimiento" IS NULL OR "fechaVencimiento" >= NOW())
+      ORDER BY "consecutivoDesde" ASC, "idRangoSecuencia" ASC
       LIMIT 1
       FOR UPDATE;
     `;

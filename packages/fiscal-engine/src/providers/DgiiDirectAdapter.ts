@@ -58,9 +58,14 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
   public readonly name = 'DGII_DIRECT';
   private liveDgiiTransmission: boolean;
   private dgiiEnvMode: 'DEV' | 'CERT' | 'PROD';
-  private loadedCertData?: { key: string; cert: string; publicKey?: string };
-  private loadedCertInfo?: LoadedCertificateInfo;
-  private fallbackX509?: { key: string; cert: string; publicKey: string; info: LoadedCertificateInfo };
+  private loadedCertsByRnc = new Map<
+    string,
+    { key: string; cert: string; publicKey?: string; info: LoadedCertificateInfo }
+  >();
+  private fallbackX509ByRnc = new Map<
+    string,
+    { key: string; cert: string; publicKey: string; info: LoadedCertificateInfo }
+  >();
 
   constructor(options: DgiiDirectOptions = {}) {
     this.liveDgiiTransmission = Boolean(options.liveDgiiTransmission);
@@ -71,6 +76,11 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
     }
   }
 
+  private normalizeRncKey(rnc?: string): string {
+    const clean = String(rnc || '').replace(/\D/g, '');
+    return clean || '__default__';
+  }
+
   public setLiveTransmission(enabled: boolean) {
     this.liveDgiiTransmission = enabled;
   }
@@ -79,20 +89,33 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
     this.dgiiEnvMode = env;
   }
 
-  public getConfigurationStatus() {
+  public hasLoadedP12ForRnc(rnc?: string): boolean {
+    const key = this.normalizeRncKey(rnc);
+    return this.loadedCertsByRnc.has(key);
+  }
+
+  public clearP12ForRnc(rnc?: string): void {
+    const key = this.normalizeRncKey(rnc);
+    this.loadedCertsByRnc.delete(key);
+  }
+
+  public getConfigurationStatus(rnc?: string) {
+    const key = this.normalizeRncKey(rnc);
+    const loaded = this.loadedCertsByRnc.get(key) || this.loadedCertsByRnc.get('__default__');
     return {
       liveDgiiTransmission: this.liveDgiiTransmission,
       dgiiEnvMode: this.dgiiEnvMode,
       dgiiEnvironmentUrl: this.resolveDgiiEnvironment('SANDBOX'),
-      hasRealP12: Boolean(this.loadedCertData),
-      certificateInfo: this.loadedCertInfo || this.getOrCreateSigningCerts().info,
+      hasRealP12: Boolean(loaded),
+      certificateInfo: loaded?.info || this.getOrCreateSigningCerts(rnc || '000000000').info,
     };
   }
 
   /**
-   * Carga un archivo .p12 codificado en Base64 usando P12Reader de la librería oficial dgii-ecf.
+   * Carga un archivo .p12 codificado en Base64 usando P12Reader de la librería oficial dgii-ecf,
+   * aislado por RNC para operación multi-empresa.
    */
-  public loadP12FromBase64(p12Base64: string, passphrase: string): LoadedCertificateInfo {
+  public loadP12FromBase64(p12Base64: string, passphrase: string, rnc?: string): LoadedCertificateInfo {
     const cleanBase64 = p12Base64.replace(/^data:.*;base64,/, '').trim();
     const reader = new P12Reader(passphrase);
     const certs = reader.getKeyFromStringBase64(cleanBase64);
@@ -101,18 +124,24 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
       throw new Error('No se pudo extraer la clave privada o certificado X.509 del archivo .p12. Verifique la contraseña.');
     }
 
-    const info = reader.getCertificateInfoFromBase64(cleanBase64);
-    this.loadedCertData = { key: certs.key, cert: certs.cert, publicKey: certs.publicKey };
-    this.loadedCertInfo = {
-      ...info,
+    const rawInfo = reader.getCertificateInfoFromBase64(cleanBase64);
+    const info: LoadedCertificateInfo = {
+      ...rawInfo,
       isRealP12: true,
     };
+    const key = this.normalizeRncKey(rnc);
+    this.loadedCertsByRnc.set(key, {
+      key: certs.key,
+      cert: certs.cert,
+      publicKey: certs.publicKey,
+      info,
+    });
 
-    return this.loadedCertInfo;
+    return info;
   }
 
   /**
-   * Retorna el certificado .p12 cargado, o genera un certificado X.509 RSA-2048 válido
+   * Retorna el certificado .p12 cargado para ese RNC, o genera un certificado X.509 RSA-2048
    * con node-forge para pruebas locales con dgii-ecf Signature y validateXMLCertificate.
    */
   public getOrCreateSigningCerts(rnc = '000000000'): {
@@ -121,16 +150,19 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
     publicKey?: string;
     info: LoadedCertificateInfo;
   } {
-    if (this.loadedCertData && this.loadedCertInfo) {
+    const rncKey = this.normalizeRncKey(rnc);
+    const real = this.loadedCertsByRnc.get(rncKey) || this.loadedCertsByRnc.get('__default__');
+    if (real) {
       return {
-        key: this.loadedCertData.key,
-        cert: this.loadedCertData.cert,
-        publicKey: this.loadedCertData.publicKey,
-        info: this.loadedCertInfo,
+        key: real.key,
+        cert: real.cert,
+        publicKey: real.publicKey,
+        info: real.info,
       };
     }
 
-    if (!this.fallbackX509) {
+    let fallback = this.fallbackX509ByRnc.get(rncKey);
+    if (!fallback) {
       const keys = forge.pki.rsa.generateKeyPair(2048);
       const cert = forge.pki.createCertificate();
       cert.publicKey = keys.publicKey;
@@ -152,7 +184,7 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
       const keyPem = forge.pki.privateKeyToPem(keys.privateKey);
       const publicKeyPem = forge.pki.publicKeyToPem(keys.publicKey);
 
-      this.fallbackX509 = {
+      fallback = {
         key: keyPem,
         cert: certPem,
         publicKey: publicKeyPem,
@@ -165,9 +197,10 @@ export class DgiiDirectAdapter implements FiscalProviderInterface {
           isRealP12: false,
         },
       };
+      this.fallbackX509ByRnc.set(rncKey, fallback);
     }
 
-    return this.fallbackX509;
+    return fallback;
   }
 
   private resolveDgiiEnvironment(tenantEnv: 'SANDBOX' | 'PRODUCTION'): ENVIRONMENT {

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { useApp } from '../../../../context/AppContext';
 import { lookupRncClient } from '../../../../lib/api';
 import {
@@ -11,6 +12,8 @@ import {
   Search,
   Save,
   Loader2,
+  ShieldCheck,
+  ArrowRight,
 } from 'lucide-react';
 
 export default function CompanySettingsPage() {
@@ -25,7 +28,7 @@ export default function CompanySettingsPage() {
     brandColor: tenant?.brandColor || '#0284c7',
     invoiceFooter:
       tenant?.invoiceFooter ||
-      'Gracias por preferirnos — Comprobante Fiscal Electrónico emitido con ANTEK Factura',
+      'Gracias por preferirnos — Comprobante Fiscal Electrónico válido ante la DGII',
     logoBase64: tenant?.logoBase64 || '',
   });
 
@@ -216,11 +219,21 @@ export default function CompanySettingsPage() {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-black text-slate-900">Configuración de Empresa & Marca</h1>
-        <p className="text-xs text-slate-500">
-          Personaliza los datos tributarios, logo y estilo de tus comprobantes e-CF
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900">Configuración de Empresa & Marca</h1>
+          <p className="text-xs text-slate-500">
+            Personaliza los datos tributarios, logo 100% marca blanca y estilo de tus comprobantes e-CF
+          </p>
+        </div>
+        <Link
+          href="/app/settings/fiscal"
+          className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold inline-flex items-center gap-2 shrink-0 transition"
+        >
+          <ShieldCheck className="w-4 h-4 text-sky-400" />
+          <span>Firma Digital (.p12) y Proveedor GTI</span>
+          <ArrowRight className="w-3.5 h-3.5" />
+        </Link>
       </div>
 
       {successMsg && (
@@ -252,7 +265,7 @@ export default function CompanySettingsPage() {
         </div>
 
         <p className="text-xs text-slate-500 leading-relaxed">
-          Sube el logo de tu negocio. Tu imagen aparecerá como la marca principal en todas las facturas y tirillas de 80mm, acompañada del sello oficial <strong>&quot;Emitido con tecnología ANTEK Factura&quot;</strong> (estilo Alegra / Stripe).
+          Sube el logo de tu negocio. Tu imagen y datos fiscales aparecerán como la marca exclusiva (100% marca blanca, sin logos de terceros) en todas las facturas, representaciones impresas y tirillas de 80mm.
         </p>
 
         <div className="flex flex-wrap items-center gap-4 pt-1">

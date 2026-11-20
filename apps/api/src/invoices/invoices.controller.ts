@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Body,
@@ -398,11 +399,25 @@ export class InvoicesController {
     return this.fiscalService.registerPurchaseFromQr(body);
   }
 
+  @Get('customers')
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Listar clientes guardados de la empresa autenticada' })
+  getCustomers(@Req() req: any) {
+    return this.fiscalService.getCustomers(req.user?.tenantId || req.tenantId);
+  }
+
+  @Get('products')
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Listar productos o servicios de la empresa autenticada' })
+  getProducts(@Req() req: any) {
+    return this.fiscalService.getProducts(req.user?.tenantId || req.tenantId);
+  }
+
   @Post('catalogs/customers')
   @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Registrar un cliente real en el directorio del tenant' })
-  addCustomer(@Body() body: any) {
-    return this.fiscalService.addCustomer(body);
+  addCustomer(@Body() body: any, @Req() req: any) {
+    return this.fiscalService.addCustomer(body, req.user?.tenantId || req.tenantId);
   }
 
   @Post('catalogs/products')
@@ -432,7 +447,8 @@ export class InvoicesController {
   }
 
   @Post('certificate/upload')
-  @ApiOperation({ summary: 'Cargar certificado digital .p12 con P12Reader de dgii-ecf y cifrado AES-256-GCM' })
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Cargar certificado digital .p12 con P12Reader de dgii-ecf y cifrado AES-256-GCM en PostgreSQL' })
   uploadCertificate(
     @Body()
     body: {
@@ -440,15 +456,28 @@ export class InvoicesController {
       passphrase: string;
       dgiiEnv?: 'DEV' | 'CERT' | 'PROD';
       liveMode?: boolean;
-    }
+      switchToDirect?: boolean;
+    },
+    @Req() req: any
   ) {
-    return this.fiscalService.uploadP12Certificate(body);
+    return this.fiscalService.uploadP12Certificate(body, req.user?.tenantId || req.tenantId);
+  }
+
+  @Delete('certificate')
+  @UseGuards(TenantAuthGuard)
+  @ApiOperation({ summary: 'Eliminar certificado digital .p12 guardado de la empresa autenticada' })
+  removeCertificate(@Req() req: any) {
+    return this.fiscalService.removeP12Certificate(req.user?.tenantId || req.tenantId);
   }
 
   @Post('dgii/config')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Configurar ambiente DGII (TesteCF/CerteCF/eCF) y modo de transmisión en vivo' })
-  updateDgiiConfig(@Body() body: { dgiiEnv?: 'DEV' | 'CERT' | 'PROD'; liveMode?: boolean }) {
-    return this.fiscalService.updateDgiiRuntimeConfig(body);
+  updateDgiiConfig(
+    @Body() body: { dgiiEnv?: 'DEV' | 'CERT' | 'PROD'; liveMode?: boolean },
+    @Req() req: any
+  ) {
+    return this.fiscalService.updateDgiiRuntimeConfig(body, req.user?.tenantId || req.tenantId);
   }
 
   @Post('dgii/validate-xml')
@@ -476,9 +505,10 @@ export class InvoicesController {
   }
 
   @Post('dgii/receptor/test-handshake')
+  @UseGuards(TenantAuthGuard)
   @ApiOperation({ summary: 'Verificar ciclo completo Emisor-Receptor (Semilla -> JWT -> ARECF) con dgii-ecf' })
-  testReceptorHandshake(@Body() body?: { rnc?: string }) {
-    return this.fiscalService.testReceptorHandshake(body?.rnc);
+  testReceptorHandshake(@Body() body?: { rnc?: string }, @Req() req?: any) {
+    return this.fiscalService.testReceptorHandshake(body?.rnc, req?.user?.tenantId || req?.tenantId);
   }
 
   @Get('provider/tenants')

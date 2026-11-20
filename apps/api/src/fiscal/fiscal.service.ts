@@ -552,6 +552,38 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         this.tenant.isConfigured = Boolean(dbTenant.rnc && dbTenant.razonSocial);
         this.tenant.environment = dbTenant.environment as any;
         this.tenant.fiscalProvider = (dbTenant.fiscalProvider as any) || 'DGII_DIRECT';
+        this.tenant.fiscalProviderFallback = (dbTenant.fiscalProviderFallback as any) || 'NONE';
+        this.tenant.contingencyMode = Boolean(dbTenant.contingencyMode);
+        this.tenant.gtiUsuarioEnc = dbTenant.gtiUsuarioEnc || null;
+        this.tenant.gtiClaveEnc = dbTenant.gtiClaveEnc || null;
+        this.tenant.hasGtiCredentials = Boolean(dbTenant.gtiUsuarioEnc && dbTenant.gtiClaveEnc);
+        this.tenant.certificadoP12Enc = dbTenant.certificadoP12Enc || null;
+        this.tenant.certificadoPassEnc = dbTenant.certificadoPassEnc || null;
+        this.tenant.hasCertificate = Boolean(dbTenant.certificadoP12Enc);
+        this.tenant.certExpiresAt = dbTenant.certExpiresAt
+          ? dbTenant.certExpiresAt.toISOString()
+          : null;
+        this.tenant.certSubject = null;
+
+        if (dbTenant.certificadoP12Enc) {
+          try {
+            if (!this.dgiiDirectAdapter.hasLoadedP12ForRnc(dbTenant.rnc)) {
+              const p12Base64 = this.cryptoService.decrypt(dbTenant.certificadoP12Enc);
+              const pass = dbTenant.certificadoPassEnc
+                ? this.cryptoService.decrypt(dbTenant.certificadoPassEnc)
+                : '';
+              const info = this.dgiiDirectAdapter.loadP12FromBase64(p12Base64, pass, dbTenant.rnc);
+              this.tenant.certSubject = info.subject;
+              this.tenant.certExpiresAt = info.validTo.toISOString();
+            } else {
+              const status = this.dgiiDirectAdapter.getConfigurationStatus(dbTenant.rnc);
+              this.tenant.certSubject = status?.certificateInfo?.subject || null;
+            }
+          } catch {
+            // Certificado corrupto o clave maestra rotada: no bloquear carga de configuración
+          }
+        }
+
         if (dbTenant.subscription) {
           this.tenant.subscription = {
             ...this.tenant.subscription,
@@ -568,6 +600,8 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
             ...s,
             nombreTipo: `e-CF Tipo ${s.tipoEcf}`,
           }));
+        } else {
+          this.sequences = [];
         }
       }
       return dbTenant;
@@ -592,12 +626,19 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         brandColor: this.tenant.brandColor,
         invoiceFooter: this.tenant.invoiceFooter,
         fiscalProvider: this.tenant.fiscalProvider,
+        fiscalProviderFallback: this.tenant.fiscalProviderFallback,
         dgiiLiveMode: this.tenant.dgiiLiveMode,
         contingencyMode: this.tenant.contingencyMode,
         environment: this.tenant.environment,
+        hasCertificate: Boolean(this.tenant.hasCertificate),
+        certSubject: this.tenant.certSubject || null,
+        certExpiresAt: this.tenant.certExpiresAt || null,
+        hasGtiCredentials: Boolean(this.tenant.hasGtiCredentials || (this.tenant.gtiUsuarioEnc && this.tenant.gtiClaveEnc)),
+        medioEmision: this.tenant.medioEmision || '',
         subscriptionPlan: this.tenant.subscription?.planSlug,
         subscriptionStatus: this.tenant.subscription?.status,
       },
+      dgiiConfig: this.dgiiDirectAdapter.getConfigurationStatus(this.tenant.rnc),
     };
   }
 
@@ -2064,6 +2105,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
             status: dbStatus,
             urlQr: record.urlQr,
             codigoSeguridad: record.codigoSeguridad,
+            fechaHoraFirma: new Date(),
             xmlHash: record.xmlHash,
             xmlStorageKey: record.xmlStorageKey,
             montoTotal: record.totales?.montoTotal || 0,
@@ -2082,6 +2124,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
             indicadorMontoGravado: record.indicadorMontoGravado ?? 0,
             tipoPago: record.tipoPago ?? 1,
             fechaEmision: new Date(),
+            fechaHoraFirma: new Date(),
             rncComprador: record.rncComprador,
             razonSocialComprador: record.razonSocialComprador || 'Consumidor Final',
             identificadorExtranjero: record.identificadorExtranjero,
@@ -2263,8 +2306,13 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
           externalDocId: dbInv.externalDocId || undefined,
           status: dbInv.status,
           fechaEmision: dbInv.fechaEmision ? dbInv.fechaEmision.toISOString().split('T')[0] : '',
+          fechaHoraFirma: dbInv.fechaHoraFirma
+            ? dbInv.fechaHoraFirma.toISOString()
+            : dbInv.createdAt?.toISOString(),
+          createdAt: dbInv.createdAt?.toISOString(),
           rncEmisor: dbInv.tenant?.rnc || this.tenant.rnc,
           razonSocialEmisor: dbInv.tenant?.razonSocial || this.tenant.razonSocial,
+          direccionEmisor: dbInv.tenant?.direccion || this.tenant.direccion,
           rncComprador: dbInv.rncComprador || undefined,
           razonSocialComprador: dbInv.razonSocialComprador || 'Consumidor Final',
           montoTotal: Number(dbInv.montoTotal || 0),
@@ -2355,9 +2403,16 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     return sourceSeqs.map((seq) => {
-      const total = Math.max(1, seq.consecutivoHasta - seq.consecutivoDesde + 1);
-      const used = Math.max(0, seq.ultimoConsecutivo - seq.consecutivoDesde + 1);
-      const remaining = Math.max(0, seq.consecutivoHasta - seq.ultimoConsecutivo);
+      const desde = Number(seq.consecutivoDesde || 1);
+      const hasta = Number(seq.consecutivoHasta || desde);
+      const ultimo = Number(seq.ultimoConsecutivo || 0);
+      const effectivePos = Math.max(ultimo, desde - 1);
+      const total = Math.max(1, hasta - desde + 1);
+      const used = Math.max(0, effectivePos - desde + 1);
+      const remaining = Math.max(0, hasta - effectivePos);
+      const nextNum = effectivePos + 1;
+      const nextEncf =
+        remaining > 0 ? `E${String(seq.tipoEcf).padStart(2, '0')}${String(nextNum).padStart(10, '0')}` : null;
       const percentRemaining = Math.round((remaining / total) * 100);
       const daysUntilExpiry = seq.fechaVencimiento
         ? Math.ceil((new Date(seq.fechaVencimiento).getTime() - Date.now()) / 86400000)
@@ -2367,6 +2422,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         ...seq,
         remaining,
         used,
+        nextEncf,
         percentRemaining,
         daysUntilExpiry,
         isLowAlert: percentRemaining <= 10,
@@ -2376,14 +2432,63 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   }
 
   public async registerSequence(
-    data: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION' },
+    data: GtiSecuenciaItem & { environment?: 'SANDBOX' | 'PRODUCTION'; autoNextRange?: boolean },
     tenantId?: string
   ) {
     await this.syncTenantContext(tenantId);
     const effectiveTenantId = tenantId || this.tenant.id;
     const env = (data.environment || this.tenant.environment || 'SANDBOX') as 'SANDBOX' | 'PRODUCTION';
     const tipo = Number(data.IdTipoDocumento);
-    const idRango = Number(data.IdRangoSecuencia || 1);
+    const consecutivoDesde = Math.max(1, Number(data.ConsecutivoDesde || 1));
+    const consecutivoHasta = Number(data.ConsecutivoHasta || consecutivoDesde);
+
+    if (!Number.isFinite(consecutivoHasta) || consecutivoHasta < consecutivoDesde) {
+      throw new BadRequestException(
+        'El número "Hasta" debe ser mayor o igual al número "Desde".'
+      );
+    }
+
+    const explicitRangeId =
+      data.IdRangoSecuencia !== undefined && data.IdRangoSecuencia !== null && Number(data.IdRangoSecuencia) > 0
+        ? Number(data.IdRangoSecuencia)
+        : null;
+
+    let idRango = explicitRangeId || 1;
+    let ultimoConsecutivo =
+      data.UltimoConsecutivo !== undefined &&
+      data.UltimoConsecutivo !== null &&
+      String(data.UltimoConsecutivo) !== ''
+        ? Math.max(0, Number(data.UltimoConsecutivo))
+        : Math.max(0, consecutivoDesde - 1);
+
+    try {
+      const existingSeqs = await prisma.ecfSequence.findMany({
+        where: { tenantId: effectiveTenantId, environment: env as any, tipoEcf: tipo },
+        orderBy: { idRangoSecuencia: 'asc' },
+      });
+
+      if (!explicitRangeId || data.autoNextRange) {
+        const sameRange = existingSeqs.find(
+          (s) => s.consecutivoDesde === consecutivoDesde && s.consecutivoHasta === consecutivoHasta
+        );
+        const seededDefaultOnly =
+          existingSeqs.length === 1 &&
+          existingSeqs[0].idRangoSecuencia === 1 &&
+          existingSeqs[0].consecutivoDesde === 1 &&
+          existingSeqs[0].consecutivoHasta === 50000 &&
+          existingSeqs[0].ultimoConsecutivo === 0;
+
+        if (sameRange) {
+          idRango = sameRange.idRangoSecuencia;
+          ultimoConsecutivo = Math.max(sameRange.ultimoConsecutivo, consecutivoDesde - 1);
+        } else if (seededDefaultOnly) {
+          idRango = 1;
+        } else if (existingSeqs.length > 0) {
+          const maxId = existingSeqs.reduce((m, s) => Math.max(m, s.idRangoSecuencia), 0);
+          idRango = maxId + 1;
+        }
+      }
+    } catch {}
 
     let newSeq: any = {
       id: `seq-${tipo}-${idRango}`,
@@ -2392,9 +2497,9 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       tipoEcf: tipo,
       nombreTipo: `e-CF Tipo ${tipo}`,
       idRangoSecuencia: idRango,
-      consecutivoDesde: Number(data.ConsecutivoDesde),
-      consecutivoHasta: Number(data.ConsecutivoHasta),
-      ultimoConsecutivo: Number(data.UltimoConsecutivo || 0),
+      consecutivoDesde,
+      consecutivoHasta,
+      ultimoConsecutivo,
       fechaVencimiento: data.Vencimiento ? new Date(data.Vencimiento) : null,
       isActive: true,
     };
@@ -2455,7 +2560,44 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  public addCustomer(body: { rnc?: string; identificadorExtranjero?: string; razonSocial: string; correo?: string; direccion?: string }) {
+  public async getCustomers(tenantId?: string) {
+    const effectiveTenantId = tenantId || this.tenant.id;
+    try {
+      const dbCustomers = await prisma.customer.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (dbCustomers.length > 0) {
+        return dbCustomers;
+      }
+    } catch {}
+    return this.enforceRlsScope(this.customers, effectiveTenantId);
+  }
+
+  public async getProducts(tenantId?: string) {
+    const effectiveTenantId = tenantId || this.tenant.id;
+    try {
+      const dbProducts = await prisma.product.findMany({
+        where: { tenantId: effectiveTenantId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (dbProducts.length > 0) {
+        return dbProducts.map((p) => ({
+          ...p,
+          name: p.nombre,
+          unitPrice: Number(p.precioUnitario),
+          taxRate: p.indicadorFacturacion,
+        }));
+      }
+    } catch {}
+    return this.enforceRlsScope(this.products, effectiveTenantId);
+  }
+
+  public async addCustomer(
+    body: { rnc?: string; identificadorExtranjero?: string; razonSocial: string; correo?: string; direccion?: string; telefono?: string },
+    tenantId?: string
+  ) {
+    const effectiveTenantId = tenantId || this.tenant.id;
     const cleanRnc = body.rnc ? body.rnc.replace(/\D/g, '') : undefined;
     if (cleanRnc) {
       const valid = cleanRnc.length === 9 ? this.validateRncChecksum(cleanRnc) : this.validateCedulaChecksum(cleanRnc);
@@ -2469,14 +2611,49 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
         source: 'DIRECTORIO_CLIENTES',
       });
     }
+
+    try {
+      if (effectiveTenantId && effectiveTenantId !== 'tenant-principal') {
+        const existing = cleanRnc
+          ? await prisma.customer.findFirst({ where: { tenantId: effectiveTenantId, rnc: cleanRnc } })
+          : null;
+        if (existing) {
+          const updated = await prisma.customer.update({
+            where: { id: existing.id },
+            data: {
+              razonSocial: body.razonSocial.trim().toUpperCase(),
+              correo: body.correo ?? existing.correo,
+              direccion: body.direccion ?? existing.direccion,
+              telefono: body.telefono ?? existing.telefono,
+            },
+          });
+          return updated;
+        }
+        const created = await prisma.customer.create({
+          data: {
+            tenantId: effectiveTenantId,
+            rnc: cleanRnc,
+            identificadorExtranjero: body.identificadorExtranjero,
+            tipoIdentificacion: cleanRnc ? (cleanRnc.length === 9 ? 1 : 2) : 3,
+            razonSocial: body.razonSocial.trim().toUpperCase(),
+            correo: body.correo,
+            direccion: body.direccion,
+            telefono: body.telefono,
+          },
+        });
+        return created;
+      }
+    } catch {}
+
     const c = {
       id: `cust-${crypto.randomUUID().slice(0, 8)}`,
-      tenantId: this.tenant.id,
+      tenantId: effectiveTenantId,
       rnc: cleanRnc,
       identificadorExtranjero: body.identificadorExtranjero,
-      razonSocial: body.razonSocial.toUpperCase(),
+      razonSocial: body.razonSocial.trim().toUpperCase(),
       correo: body.correo,
       direccion: body.direccion,
+      telefono: body.telefono,
     };
     this.customers.unshift(c);
     return c;
@@ -2645,6 +2822,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       municipioCodigo?: string;
       gtiUsuario?: string;
       gtiClave?: string;
+      clearGtiCredentials?: boolean;
       medioEmision?: string;
       planSlug?: string;
       logoBase64?: string | null;
@@ -2690,8 +2868,19 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       this.tenant.contingencyMode = body.contingencyMode;
       this.tenant.contingencySince = body.contingencyMode ? new Date().toISOString() : null;
     }
-    if (body.gtiUsuario) this.tenant.gtiUsuarioEnc = this.cryptoService.encrypt(body.gtiUsuario);
-    if (body.gtiClave) this.tenant.gtiClaveEnc = this.cryptoService.encrypt(body.gtiClave);
+    if (body.clearGtiCredentials) {
+      this.tenant.gtiUsuarioEnc = null;
+      this.tenant.gtiClaveEnc = null;
+      this.tenant.hasGtiCredentials = false;
+    } else {
+      if (body.gtiUsuario && body.gtiUsuario.trim()) {
+        this.tenant.gtiUsuarioEnc = this.cryptoService.encrypt(body.gtiUsuario.trim());
+      }
+      if (body.gtiClave && body.gtiClave.trim()) {
+        this.tenant.gtiClaveEnc = this.cryptoService.encrypt(body.gtiClave.trim());
+      }
+      this.tenant.hasGtiCredentials = Boolean(this.tenant.gtiUsuarioEnc && this.tenant.gtiClaveEnc);
+    }
     if (body.logoBase64 !== undefined) this.tenant.logoBase64 = body.logoBase64;
     if (body.brandColor !== undefined) this.tenant.brandColor = body.brandColor;
     if (body.invoiceFooter !== undefined) this.tenant.invoiceFooter = body.invoiceFooter;
@@ -2731,12 +2920,30 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
             telefono: this.tenant.telefono || undefined,
             environment: this.tenant.environment as any,
             fiscalProvider: this.tenant.fiscalProvider as any,
+            fiscalProviderFallback: (this.tenant.fiscalProviderFallback || 'NONE') as any,
+            contingencyMode: Boolean(this.tenant.contingencyMode),
+            ...(body.clearGtiCredentials
+              ? { gtiUsuarioEnc: null, gtiClaveEnc: null }
+              : {
+                  ...(body.gtiUsuario ? { gtiUsuarioEnc: this.tenant.gtiUsuarioEnc } : {}),
+                  ...(body.gtiClave ? { gtiClaveEnc: this.tenant.gtiClaveEnc } : {}),
+                }),
           },
         });
       } catch {}
     }
 
-    return { success: true, tenant: this.tenant };
+    const safeTenant = {
+      ...this.tenant,
+      gtiUsuarioEnc: undefined,
+      gtiClaveEnc: undefined,
+      certificadoP12Enc: undefined,
+      certificadoPassEnc: undefined,
+      hasCertificate: Boolean(this.tenant.hasCertificate),
+      hasGtiCredentials: Boolean(this.tenant.gtiUsuarioEnc && this.tenant.gtiClaveEnc),
+    };
+
+    return { success: true, tenant: safeTenant };
   }
 
   public createApiKey(
@@ -3822,42 +4029,77 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   // MÉTODOS DE PRODUCCIÓN DGII-ECF (.P12, VALIDATE XML, CHECK STATUS, ACECF, ANECF, RECEPTOR)
   // ============================================================================
 
-  public uploadP12Certificate(dto: {
-    p12Base64: string;
-    passphrase: string;
-    dgiiEnv?: 'DEV' | 'CERT' | 'PROD';
-    liveMode?: boolean;
-  }) {
+  public async uploadP12Certificate(
+    dto: {
+      p12Base64: string;
+      passphrase: string;
+      dgiiEnv?: 'DEV' | 'CERT' | 'PROD';
+      liveMode?: boolean;
+      switchToDirect?: boolean;
+    },
+    tenantId?: string
+  ) {
     if (!dto.p12Base64) {
       throw new BadRequestException('Debe adjuntar el archivo .p12 en Base64.');
     }
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
     try {
-      const info = this.dgiiDirectAdapter.loadP12FromBase64(dto.p12Base64, dto.passphrase || '');
-      if (dto.dgiiEnv) this.dgiiDirectAdapter.setDgiiEnvironment(dto.dgiiEnv);
+      const info = this.dgiiDirectAdapter.loadP12FromBase64(
+        dto.p12Base64,
+        dto.passphrase || '',
+        this.tenant.rnc
+      );
+      if (dto.dgiiEnv) {
+        this.dgiiDirectAdapter.setDgiiEnvironment(dto.dgiiEnv);
+        this.tenant.environment = dto.dgiiEnv === 'PROD' ? 'PRODUCTION' : 'SANDBOX';
+      }
       if (dto.liveMode !== undefined) {
         this.dgiiDirectAdapter.setLiveTransmission(dto.liveMode);
         this.tenant.dgiiLiveMode = dto.liveMode;
       }
+      if (dto.switchToDirect) {
+        this.tenant.fiscalProvider = 'DGII_DIRECT';
+      }
 
-      // Cifrado AES-256-GCM en memoria/BD
-      this.tenant.certificadoP12Enc = this.cryptoService.encrypt(dto.p12Base64);
-      this.tenant.certificadoPassEnc = this.cryptoService.encrypt(dto.passphrase || '');
+      // Cifrado AES-256-GCM en memoria y PostgreSQL
+      const p12Enc = this.cryptoService.encrypt(dto.p12Base64);
+      const passEnc = this.cryptoService.encrypt(dto.passphrase || '');
+      this.tenant.certificadoP12Enc = p12Enc;
+      this.tenant.certificadoPassEnc = passEnc;
       this.tenant.hasCertificate = true;
       this.tenant.certSubject = info.subject;
       this.tenant.certExpiresAt = info.validTo.toISOString();
+
+      if (effectiveTenantId && effectiveTenantId !== 'tenant-principal') {
+        try {
+          await prisma.tenant.update({
+            where: { id: effectiveTenantId },
+            data: {
+              certificadoP12Enc: p12Enc,
+              certificadoPassEnc: passEnc,
+              certExpiresAt: info.validTo,
+              ...(dto.switchToDirect ? { fiscalProvider: 'DGII_DIRECT' as any } : {}),
+              ...(dto.dgiiEnv
+                ? { environment: (dto.dgiiEnv === 'PROD' ? 'PRODUCTION' : 'SANDBOX') as any }
+                : {}),
+            },
+          });
+        } catch {}
+      }
 
       this.pushAuditLog({
         provider: 'DGII_DIRECT',
         eventType: 'P12_CERTIFICATE_LOADED',
         httpStatus: 200,
-        requestPayload: { subject: info.subject, serialNumber: info.serialNumber },
+        requestPayload: { subject: info.subject, serialNumber: info.serialNumber, tenantId: effectiveTenantId },
         responsePayload: { validFrom: info.validFrom, validTo: info.validTo },
       });
 
       return {
         success: true,
         certificate: info,
-        dgiiConfig: this.dgiiDirectAdapter.getConfigurationStatus(),
+        dgiiConfig: this.dgiiDirectAdapter.getConfigurationStatus(this.tenant.rnc),
       };
     } catch (err: any) {
       throw new BadRequestException(
@@ -3866,13 +4108,58 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  public updateDgiiRuntimeConfig(dto: { dgiiEnv?: 'DEV' | 'CERT' | 'PROD'; liveMode?: boolean }) {
-    if (dto.dgiiEnv) this.dgiiDirectAdapter.setDgiiEnvironment(dto.dgiiEnv);
+  public async removeP12Certificate(tenantId?: string) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    this.dgiiDirectAdapter.clearP12ForRnc(this.tenant.rnc);
+    this.tenant.certificadoP12Enc = null;
+    this.tenant.certificadoPassEnc = null;
+    this.tenant.hasCertificate = false;
+    this.tenant.certSubject = null;
+    this.tenant.certExpiresAt = null;
+
+    if (effectiveTenantId && effectiveTenantId !== 'tenant-principal') {
+      try {
+        await prisma.tenant.update({
+          where: { id: effectiveTenantId },
+          data: {
+            certificadoP12Enc: null,
+            certificadoPassEnc: null,
+            certExpiresAt: null,
+          },
+        });
+      } catch {}
+    }
+
+    return {
+      success: true,
+      dgiiConfig: this.dgiiDirectAdapter.getConfigurationStatus(this.tenant.rnc),
+    };
+  }
+
+  public async updateDgiiRuntimeConfig(
+    dto: { dgiiEnv?: 'DEV' | 'CERT' | 'PROD'; liveMode?: boolean },
+    tenantId?: string
+  ) {
+    await this.syncTenantContext(tenantId);
+    const effectiveTenantId = tenantId || this.tenant.id;
+    if (dto.dgiiEnv) {
+      this.dgiiDirectAdapter.setDgiiEnvironment(dto.dgiiEnv);
+      this.tenant.environment = dto.dgiiEnv === 'PROD' ? 'PRODUCTION' : 'SANDBOX';
+      if (effectiveTenantId && effectiveTenantId !== 'tenant-principal') {
+        try {
+          await prisma.tenant.update({
+            where: { id: effectiveTenantId },
+            data: { environment: this.tenant.environment as any },
+          });
+        } catch {}
+      }
+    }
     if (dto.liveMode !== undefined) {
       this.dgiiDirectAdapter.setLiveTransmission(dto.liveMode);
       this.tenant.dgiiLiveMode = dto.liveMode;
     }
-    return this.dgiiDirectAdapter.getConfigurationStatus();
+    return this.dgiiDirectAdapter.getConfigurationStatus(this.tenant.rnc);
   }
 
   public validateSignedXmlWithDgiiEcf(xmlString: string) {
@@ -3999,7 +4286,10 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     return { estado: 'Aprobación Comercial recibida', fecha: new Date().toISOString() };
   }
 
-  public async testReceptorHandshake(sampleRnc = '101001577') {
+  public async testReceptorHandshake(sampleRnc = '101001577', tenantId?: string) {
+    if (tenantId) {
+      await this.syncTenantContext(tenantId);
+    }
     const rncToUse = this.tenant.rnc || sampleRnc;
     const seedXml = this.dgiiDirectAdapter.generateAuthSeed(rncToUse);
     const { key, cert } = this.dgiiDirectAdapter.getOrCreateSigningCerts(rncToUse);

@@ -22,6 +22,13 @@ const { FiscalService } = require('../fiscal/fiscal.service');
 const { PurchasesService } = require('../purchases/purchases.service');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { SecurityShieldService } = require('../security/security-shield.service');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {
+  DgiiDirectAdapter,
+  EcfType,
+  FiscalValidator,
+  TaxCalculator,
+} = require('@factura-ecf/fiscal-engine');
 
 async function runTests() {
   // =========================================================================
@@ -307,8 +314,62 @@ async function runTests() {
     invAny.findMany = origInvFindMany;
   }
 
+  // =========================================================================
+  // 5. Validación y Firma XMLDSig de e-CF 45 (Gubernamental Electrónico)
+  // =========================================================================
+  const draft45: any = {
+    rncEmisor: '131880738',
+    razonSocialEmisor: 'ANTEK DOMINICANA SRL',
+    tipoEcf: EcfType.GUBERNAMENTAL,
+    encf: 'E450000000001',
+    fechaEmision: new Date(),
+    indicadorMontoGravado: 0,
+    tipoIngresos: '01',
+    tipoPago: 1,
+    formaPago: 1,
+    comprador: {
+      rncComprador: '401506254',
+      razonSocialComprador: 'MINISTERIO DE HACIENDA',
+    },
+    items: [
+      {
+        numeroLinea: 1,
+        indicadorBienServicio: 2,
+        indicadorFacturacion: 1,
+        nombreItem: 'Servicios tecnológicos institucionales',
+        cantidadItem: 1,
+        precioUnitarioItem: 1000,
+      },
+    ],
+  };
+
+  const calc45 = TaxCalculator.calculateInvoice(draft45);
+  const enriched45 = {
+    ...draft45,
+    items: calc45.items,
+    totalesCalculados: calc45.totales,
+  };
+  FiscalValidator.validate(enriched45);
+  assert.strictEqual(calc45.totales.montoTotal, 1180);
+
+  const dgiiAdapter = new DgiiDirectAdapter();
+  dgiiAdapter.setLiveTransmission(false);
+  const emitted45 = await dgiiAdapter.emitInvoice(
+    {
+      rnc: '131880738',
+      environment: 'SANDBOX',
+      legalName: 'ANTEK DOMINICANA SRL',
+    },
+    enriched45,
+    { returnXml: 1 }
+  );
+  assert.ok(emitted45.xmlSigned && emitted45.xmlSigned.includes('<TipoeCF>45</TipoeCF>'));
+  assert.ok(emitted45.xmlSigned && emitted45.xmlSigned.includes('<eNCF>E450000000001</eNCF>'));
+  assert.strictEqual(String(emitted45.codigoSeguridad || '').length, 6);
+  assert.ok(String(emitted45.urlQr || '').includes('E450000000001'));
+
   console.log(
-    '✓ Todos los tests de API Keys (HMAC-SHA256 + Pepper + timingSafeEqual), RNC DGII y Formato 606 oficial pasaron.'
+    '✓ Todos los tests de API Keys (HMAC-SHA256 + Pepper + timingSafeEqual), RNC DGII, Formato 606 oficial y e-CF 45 Gubernamental pasaron.'
   );
 }
 

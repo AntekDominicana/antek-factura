@@ -97,7 +97,7 @@ const DEFAULT_PLANS: PlanConfig[] = [
     monthlyInvoiceLimit: 100,
     maxUsers: 2,
     maxBranches: 1,
-    allowedEcfTypes: [31, 32, 33, 34, 41, 43],
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
     apiAccess: false,
     isActive: true,
   },
@@ -111,7 +111,7 @@ const DEFAULT_PLANS: PlanConfig[] = [
     monthlyInvoiceLimit: 600,
     maxUsers: 5,
     maxBranches: 3,
-    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45],
+    allowedEcfTypes: [31, 32, 33, 34, 41, 43, 44, 45, 46, 47],
     apiAccess: true,
     isActive: true,
   },
@@ -1214,14 +1214,19 @@ export class BillingService {
       );
     }
 
-    if (tipoEcf && Array.isArray(plan.allowedEcfTypes) && !plan.allowedEcfTypes.includes(tipoEcf)) {
+    const defaultSpec = DEFAULT_PLANS.find((p) => p.code === plan.code);
+    const effectiveAllowed = Array.from(
+      new Set([...(Array.isArray(plan.allowedEcfTypes) ? plan.allowedEcfTypes : []), ...(defaultSpec?.allowedEcfTypes || [])])
+    );
+
+    if (tipoEcf && effectiveAllowed.length > 0 && !effectiveAllowed.includes(tipoEcf)) {
       throw new HttpException(
         {
           statusCode: HttpStatus.FORBIDDEN,
           error: 'Forbidden',
           code: 'PLAN_UPGRADE_REQUIRED',
           message: `El tipo de comprobante e-CF ${tipoEcf} no está habilitado en el ${plan.name}. Actualiza tu plan para continuar.`,
-          allowedTypes: plan.allowedEcfTypes,
+          allowedTypes: effectiveAllowed,
           requestedType: tipoEcf,
         },
         HttpStatus.FORBIDDEN
