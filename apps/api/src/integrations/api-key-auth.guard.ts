@@ -75,9 +75,9 @@ export class ApiKeyAuthGuard implements CanActivate {
         include: { tenant: { select: { id: true, environment: true } } },
       });
 
-      candidates = dbRecords
-        .filter((r) => Boolean(r.tenant))
-        .map((r) => ({
+      const freshCandidates: CachedApiKeyCandidate[] = dbRecords
+        .filter((r: any) => Boolean(r.tenant))
+        .map((r: any) => ({
           id: r.id,
           tenantId: r.tenantId,
           userId: r.createdByUserId || null,
@@ -93,8 +93,9 @@ export class ApiKeyAuthGuard implements CanActivate {
             | 'PRODUCTION',
         }));
 
-      if (candidates.length > 0) {
-        await this.cacheService.set(cacheKey, candidates, 30);
+      candidates = freshCandidates;
+      if (freshCandidates.length > 0) {
+        await this.cacheService.set(cacheKey, freshCandidates, 30);
       }
     }
 

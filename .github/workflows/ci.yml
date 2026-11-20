@@ -70,6 +70,9 @@ jobs:
       - name: Generate Prisma Client
         run: pnpm --filter @factura-ecf/database exec prisma generate
 
+      - name: Build Database Package
+        run: pnpm --filter @factura-ecf/database run build
+
       - name: Build Fiscal Engine
         run: pnpm --filter @factura-ecf/fiscal-engine run build
 
