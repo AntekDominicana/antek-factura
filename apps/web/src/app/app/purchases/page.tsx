@@ -922,7 +922,7 @@ function PurchasesContent() {
       const currentPeriod = new Date().toISOString().slice(0, 7).replace('-', '');
       await apiDownload(
         `/v1/dgii/reports/${currentPeriod}/excel`,
-        `Formato_606_DGII_${currentPeriod}.xls`
+        `Formato-de-Envio-606-${currentPeriod}.xls`
       );
     } catch (err: any) {
       alert(err?.message || 'No se pudo descargar el Excel oficial Formato 606.');

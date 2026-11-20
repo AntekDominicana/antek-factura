@@ -304,7 +304,7 @@ export class InvoicesController {
   @Get('dgii/reports/:period/excel')
   @UseGuards(TenantAuthGuard)
   @ApiOperation({
-    summary: 'Descargar Libro Contable Digital en Excel (.xls multi-hoja: Compras 606, Ventas 607 y Resumen IT-1)',
+    summary: 'Descargar Formato de Envío 606 Oficial DGII (.xls Versión 2025 con macros, rellenado en memoria por cuenta)',
   })
   async downloadAccountantExcel(
     @Param('period') period: string,
@@ -316,10 +316,11 @@ export class InvoicesController {
       req.user?.tenantId || req.tenantId
     );
     res.set({
-      'Content-Type': 'application/vnd.ms-excel; charset=utf-8',
+      'Content-Type': 'application/vnd.ms-excel',
       'Content-Disposition': `attachment; filename="${excel.filename}"`,
+      'Content-Length': String(excel.buffer.length),
     });
-    res.send(excel.xmlWorkbook);
+    res.send(excel.buffer);
   }
 
   @Get('dgii/verify-rnc/:rnc')

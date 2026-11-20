@@ -88,7 +88,7 @@ export default function ReportsPage() {
       if (kind === 'excel') {
         await apiDownload(
           `/v1/dgii/reports/${periodCompact}/excel`,
-          `Formato_606_DGII_${periodCompact}.xls`
+          `Formato-de-Envio-606-${periodCompact}.xls`
         );
       } else {
         await apiDownload(
